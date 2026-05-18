@@ -87,7 +87,21 @@ impl OpenAiCompatibleAdapter {
         match format {
             ApiFormat::OpenAiCompatible => {
                 let mut msgs = vec![json!({"role": "system", "content": system_prompt})];
-                msgs.extend_from_slice(messages);
+                for m in messages {
+                    let mut modified = m.clone();
+                    if let Some(tool_calls) = modified.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                        for tc in tool_calls {
+                            if let Some(func) = tc.get_mut("function") {
+                                if let Some(args) = func.get("arguments") {
+                                    if args.is_object() {
+                                        func["arguments"] = json!(args.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    msgs.push(modified);
+                }
 
                 let openai_tools: Vec<Value> = tools.into_iter().map(|t| json!({
                     "type": "function",
@@ -108,7 +122,21 @@ impl OpenAiCompatibleAdapter {
             }
             ApiFormat::OllamaNative => {
                 let mut msgs = vec![json!({"role": "system", "content": system_prompt})];
-                msgs.extend_from_slice(messages);
+                for m in messages {
+                    let mut modified = m.clone();
+                    if let Some(tool_calls) = modified.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                        for tc in tool_calls {
+                            if let Some(func) = tc.get_mut("function") {
+                                if let Some(args_str) = func.get("arguments").and_then(|v| v.as_str()) {
+                                    if let Ok(obj) = serde_json::from_str::<Value>(args_str) {
+                                        func["arguments"] = obj;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    msgs.push(modified);
+                }
 
                 // Ollama native tool format mirrors OpenAI's tool schema
                 let ollama_tools: Vec<Value> = tools.into_iter().map(|t| json!({
@@ -151,18 +179,26 @@ impl OpenAiCompatibleAdapter {
                 let mut calls = Vec::new();
                 for tc in tool_calls {
                     let func = &tc["function"];
-                    let args_str = func["arguments"].as_str().unwrap_or("{}");
-                    match serde_json::from_str::<Value>(args_str) {
-                        Ok(args) => calls.push(ToolCall {
-                            id:   tc["id"].as_str().unwrap_or("0").to_string(),
-                            name: func["name"].as_str().unwrap_or("").to_string(),
-                            args,
-                        }),
-                        Err(e) => return Ok(ModelResponse::ParseError {
-                            raw_text: args_str.to_string(),
-                            error:    format!("Failed to parse tool args: {}", e),
-                        }),
-                    }
+                    
+                    let args = if let Some(args_str) = func["arguments"].as_str() {
+                        match serde_json::from_str::<Value>(args_str) {
+                            Ok(v) => v,
+                            Err(e) => return Ok(ModelResponse::ParseError {
+                                raw_text: args_str.to_string(),
+                                error: format!("Failed to parse tool args: {}", e),
+                            }),
+                        }
+                    } else if func["arguments"].is_object() {
+                        func["arguments"].clone()
+                    } else {
+                        json!({})
+                    };
+
+                    calls.push(ToolCall {
+                        id:   tc["id"].as_str().unwrap_or("0").to_string(),
+                        name: func["name"].as_str().unwrap_or("").to_string(),
+                        args,
+                    });
                 }
                 if !calls.is_empty() {
                     return Ok(ModelResponse::ToolCalls(calls));
