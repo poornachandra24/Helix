@@ -1,0 +1,21 @@
+{
+  "version": "20260519_001738",
+  "model": "gpt-oss:120b-cloud",
+  "provider": "Ollama Cloud",
+  "metrics": {
+    "p95_latency_ms": 12710,
+    "avg_tokens_per_turn": 0.0,
+    "tool_accuracy_pct": 100.0,
+    "avg_healer_retries": 0.0,
+    "compaction_rate_per_10": 0.0,
+    "error_rate": 0.0
+  },
+  "case_latencies": {
+    "003_list_src": 7589,
+    "002_read_cargo_toml": 4196,
+    "001_list_dir": 3374,
+    "006_long_context": 9120,
+    "005_read_engine": 12710,
+    "004_multi_tool": 7084
+  }
+}

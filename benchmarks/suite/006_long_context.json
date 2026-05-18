@@ -1,0 +1,8 @@
+{
+  "id": "006_long_context",
+  "description": "Agent must read multiple files to synthesize an answer — stresses context management",
+  "prompt": "Read src/model.rs, src/engine.rs, and src/context.rs then summarise how the agent loop works end-to-end in 3 bullet points.",
+  "expected_tools": ["read_file"],
+  "max_iterations": 8,
+  "timeout_ms": 90000
+}

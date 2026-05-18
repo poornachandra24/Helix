@@ -1,0 +1,8 @@
+{
+  "id": "004_multi_tool",
+  "description": "Agent must use both list_dir and read_file in a single turn",
+  "prompt": "First list the files in the project root, then read the content of Cargo.toml and tell me which dependencies are listed.",
+  "expected_tools": ["list_dir", "read_file"],
+  "max_iterations": 5,
+  "timeout_ms": 45000
+}
