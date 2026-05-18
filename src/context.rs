@@ -1,81 +1,190 @@
 use serde_json::{json, Value};
+use crate::tools::ToolDescriptor;
+
+// ──────────────────────────────────────────────
+// Token Estimation
+// ──────────────────────────────────────────────
+
+pub struct TokenEstimator;
+
+impl TokenEstimator {
+    /// Fixed overhead per chat message (role field + JSON structural tokens).
+    /// Matches cl100k_base empirical measurements (OpenAI cookbook).
+    const MESSAGE_OVERHEAD: usize = 4;
+
+    /// Estimate tokens for a text string, adjusting ratio by content type.
+    pub fn estimate_text(text: &str) -> usize {
+        if text.is_empty() {
+            return 0;
+        }
+        // Heuristic: count structural chars to detect code/JSON density
+        let structural = text
+            .chars()
+            .filter(|c| matches!(c, '{' | '}' | '(' | ')' | '[' | ']' | ';' | '='))
+            .count();
+        let ratio = structural as f64 / text.len() as f64;
+
+        let chars_per_token = if ratio > 0.08 {
+            2.8 // code / JSON — denser than prose
+        } else {
+            4.0 // natural language
+        };
+        (text.len() as f64 / chars_per_token).ceil() as usize
+    }
+
+    /// Estimate tokens for a single chat message `{"role":..., "content":...}`.
+    pub fn estimate_message(msg: &Value) -> usize {
+        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        // role is ~1 token; add structural overhead
+        1 + Self::estimate_text(content) + Self::MESSAGE_OVERHEAD
+    }
+
+    /// Estimate the token cost of injecting tool schemas into every API call.
+    /// Called once at tool-registration time and cached in `ContextBudget`.
+    pub fn estimate_tool_descriptors(tools: &[ToolDescriptor]) -> usize {
+        tools.iter().map(|t| {
+            let schema_str = t.parameters.to_string();
+            Self::estimate_text(&t.name)
+                + Self::estimate_text(&t.description)
+                + Self::estimate_text(&schema_str)
+                + 12 // per-tool structural JSON overhead
+        }).sum()
+    }
+
+    /// Estimate token cost of the system prompt (injected once per call).
+    pub fn estimate_system_prompt(prompt: &str) -> usize {
+        Self::estimate_text(prompt) + Self::MESSAGE_OVERHEAD
+    }
+}
+
+// ──────────────────────────────────────────────
+// Context Budget
+// ──────────────────────────────────────────────
+
+/// Tracks the token "accounting" for a session.
+/// All non-message costs are pre-measured so the compaction logic
+/// only needs to work with the message slice.
+#[derive(Debug, Clone)]
+pub struct ContextBudget {
+    /// Total model context window size (tokens).
+    pub model_window: usize,
+    /// Pre-measured cost of the system prompt.
+    pub system_prompt_tokens: usize,
+    /// Pre-measured cost of all registered tool schemas.
+    pub tool_descriptor_tokens: usize,
+    /// Tokens reserved for the model's own response generation.
+    pub response_headroom: usize,
+}
+
+impl ContextBudget {
+    pub fn new(
+        model_window: usize,
+        system_prompt: &str,
+        tools: &[ToolDescriptor],
+        response_headroom: usize,
+    ) -> Self {
+        Self {
+            model_window,
+            system_prompt_tokens: TokenEstimator::estimate_system_prompt(system_prompt),
+            tool_descriptor_tokens: TokenEstimator::estimate_tool_descriptors(tools),
+            response_headroom,
+        }
+    }
+
+    /// Tokens available for the conversation message history.
+    pub fn available_for_messages(&self) -> usize {
+        self.model_window
+            .saturating_sub(self.system_prompt_tokens)
+            .saturating_sub(self.tool_descriptor_tokens)
+            .saturating_sub(self.response_headroom)
+    }
+}
+
+impl Default for ContextBudget {
+    fn default() -> Self {
+        Self {
+            model_window: 8_192,
+            system_prompt_tokens: 0,
+            tool_descriptor_tokens: 0,
+            response_headroom: 2_048,
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
+// Context Manager
+// ──────────────────────────────────────────────
 
 pub struct ContextManager {
-    /// The maximum approximate token budget for the context window.
-    /// Default is 6000 tokens (approx 21,000 characters), which safely fits in most 8k models.
-    max_tokens_approx: usize, 
-    /// The number of initial messages to permanently pin (usually the first user goal)
-    keep_first_n: usize, 
+    pub budget: ContextBudget,
+    /// Number of leading messages to permanently pin (the user's original goal).
+    keep_first_n: usize,
 }
 
 impl ContextManager {
-    pub fn new() -> Self {
-        Self {
-            max_tokens_approx: 6000, 
-            keep_first_n: 1, 
-        }
+    pub fn new(budget: ContextBudget) -> Self {
+        Self { budget, keep_first_n: 1 }
     }
 
-    /// Fast and robust token approximation (average 3.5 chars per English token)
-    fn estimate_tokens(msg: &Value) -> usize {
-        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        (content.len() as f64 / 3.5).ceil() as usize
-    }
+    /// Compact the message list if total tokens exceed the available budget.
+    /// Returns `(compacted_messages, was_compacted)`.
+    pub fn compact_if_needed(&self, messages: Vec<Value>) -> (Vec<Value>, bool) {
+        let available = self.budget.available_for_messages();
+        let total: usize = messages.iter().map(TokenEstimator::estimate_message).sum();
 
-    /// Performs a production-grade Mid-Window Eviction.
-    /// It permanently pins the initial instructions/goal, and rolls the newest messages,
-    /// selectively omitting the intermediate (middle) turns if the token limit is exceeded.
-    pub fn compact_if_needed(&self, messages: Vec<Value>) -> Vec<Value> {
-        let total_tokens: usize = messages.iter().map(Self::estimate_tokens).sum();
-        
-        // If we are within budget, or we don't even have enough messages to safely drop the middle
-        if total_tokens <= self.max_tokens_approx || messages.len() <= self.keep_first_n + 2 {
-            return messages;
+        tracing::debug!(
+            total_tokens = total,
+            available = available,
+            messages = messages.len(),
+            "Context budget check"
+        );
+
+        if total <= available || messages.len() <= self.keep_first_n + 2 {
+            return (messages, false);
         }
 
-        // 1. Pin the initial messages
-        let mut compacted = messages[0..self.keep_first_n].to_vec();
-        
-        let mut recent_messages = vec![];
-        let mut current_tokens = compacted.iter().map(Self::estimate_tokens).sum::<usize>();
-        
-        let mut recent_idx = messages.len() - 1;
-        let notice_tokens = 30; // tokens for the eviction notice itself
-        
-        // 2. Roll backwards from the newest messages, collecting until we hit the token budget
-        while recent_idx >= self.keep_first_n {
-            let msg_tokens = Self::estimate_tokens(&messages[recent_idx]);
-            
-            if current_tokens + msg_tokens + notice_tokens > self.max_tokens_approx {
-                // If even the single most recent message is too massive, we MUST include it 
-                // so the agent knows what just happened, but we stop looking further back.
-                if recent_messages.is_empty() {
-                    recent_messages.push(messages[recent_idx].clone());
+        // Pin the first N messages (original goal)
+        let mut compacted = messages[..self.keep_first_n].to_vec();
+        let mut recent: Vec<Value> = Vec::new();
+        let mut used: usize = compacted.iter().map(TokenEstimator::estimate_message).sum();
+        let notice_overhead = 30;
+
+        let mut idx = messages.len() - 1;
+        loop {
+            let cost = TokenEstimator::estimate_message(&messages[idx]);
+            if used + cost + notice_overhead > available {
+                if recent.is_empty() {
+                    recent.push(messages[idx].clone()); // always keep at least the latest
                 }
                 break;
             }
-            
-            recent_messages.push(messages[recent_idx].clone());
-            current_tokens += msg_tokens;
-            
-            if recent_idx == 0 { break; }
-            recent_idx -= 1;
+            recent.push(messages[idx].clone());
+            used += cost;
+            if idx == self.keep_first_n { break; }
+            idx -= 1;
         }
-        
-        // 3. Restore chronological order for the recent slice
-        recent_messages.reverse();
 
-        // 4. Calculate how many intermediate turns were sacrificed
-        let omitted_count = messages.len() - self.keep_first_n - recent_messages.len();
-        
-        if omitted_count > 0 {
+        recent.reverse();
+
+        let omitted = messages.len() - self.keep_first_n - recent.len();
+        if omitted > 0 {
             compacted.push(json!({
                 "role": "system",
-                "content": format!("[System Note: {} intermediate turns were omitted due to context length constraints. The memory was seamlessly compacted. Focus on your original goal and the immediate recent context.]", omitted_count)
+                "content": format!(
+                    "[System Note: {} intermediate turns were omitted due to context window constraints ({} tokens available for messages). The conversation was seamlessly compacted. Maintain focus on your original goal.]",
+                    omitted, available
+                )
             }));
         }
-        
-        compacted.extend(recent_messages);
-        compacted
+
+        compacted.extend(recent);
+        tracing::info!(omitted, "Context compacted");
+        (compacted, true)
+    }
+}
+
+impl Default for ContextManager {
+    fn default() -> Self {
+        Self::new(ContextBudget::default())
     }
 }
