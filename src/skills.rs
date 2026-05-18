@@ -14,24 +14,37 @@ impl SkillRegistry {
         Ok(Self { skills_dir })
     }
 
-    pub fn load_skills_prompt(&self) -> Result<String> {
-        let mut prompt = String::from("\nYou have the following skills available (learned from previous sessions):\n");
-        let mut has_skills = false;
-        
-        for entry in fs::read_dir(&self.skills_dir)? {
-            let entry = entry?;
-            if entry.path().is_file() {
-                if let Ok(content) = fs::read_to_string(entry.path()) {
-                    has_skills = true;
-                    prompt.push_str(&format!("--- Skill: {:?} ---\n{}\n", entry.file_name(), content));
+    /// Load all `.txt` / `.md` files from the skills directory into a single
+    /// prompt block. Returns `None` if no skills exist (avoids injecting an
+    /// empty header into the system prompt).
+    pub fn load_skills_prompt(&self) -> Option<String> {
+        let mut sections: Vec<String> = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(&self.skills_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
+                if path.is_file() && matches!(ext, "txt" | "md") {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if !content.trim().is_empty() {
+                            sections.push(format!(
+                                "--- Skill: {} ---\n{}",
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                                content.trim()
+                            ));
+                        }
+                    }
                 }
             }
         }
-        
-        if has_skills {
-            Ok(prompt)
+
+        if sections.is_empty() {
+            None
         } else {
-            Ok(String::new())
+            Some(format!(
+                "\n\nYou have the following domain-specific skills available:\n{}",
+                sections.join("\n\n")
+            ))
         }
     }
 }
