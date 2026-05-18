@@ -1,5 +1,9 @@
 use thiserror::Error;
 
+/// Canonical error type for the harness-cli codebase.
+/// Modules migrate to this from `anyhow` incrementally; the `#[allow]`
+/// attribute will be removed once all call-sites are wired up.
+#[allow(dead_code)]
 #[derive(Error, Debug)]
 pub enum HarnessError {
     #[error("API error from {provider}: {message}")]
