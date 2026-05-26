@@ -343,6 +343,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             let mut frame_idx = 0;
             let mut show_spinner = false;
             let mut received_any = false;
+            let mut spinner_suffix = "thinking...".to_string();
             let thinking_style = console::Style::new().color256(244); // Dim grey
             let spinner_style = console::Style::new().color256(51).bold(); // Cyber Cyan
 
@@ -360,6 +361,21 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                                         io::stdout().flush().ok();
                                     }
                                     show_spinner = false;
+                                } else if token.starts_with("\x1b[S") {
+                                    spinner_suffix = token.strip_prefix("\x1b[S").unwrap_or("thinking...").to_string();
+                                    if show_spinner && !received_any {
+                                        let frame = spinner_frames[frame_idx % spinner_frames.len()];
+                                        print!("\r{} {} ", spinner_style.apply_to(frame), thinking_style.apply_to(&spinner_suffix));
+                                        io::stdout().flush().ok();
+                                    }
+                                } else if token.starts_with("\x1b[T") {
+                                    if show_spinner {
+                                        print!("\r\x1B[K");
+                                        io::stdout().flush().ok();
+                                    }
+                                    let msg = token.strip_prefix("\x1b[T").unwrap_or("");
+                                    println!("{}", msg);
+                                    io::stdout().flush().ok();
                                 } else {
                                     if show_spinner {
                                         print!("\r\x1B[K");
@@ -379,7 +395,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     _ = interval.tick() => {
                         if show_spinner && !received_any {
                             let frame = spinner_frames[frame_idx % spinner_frames.len()];
-                            print!("\r{} {} ", spinner_style.apply_to(frame), thinking_style.apply_to("thinking..."));
+                            print!("\r{} {} ", spinner_style.apply_to(frame), thinking_style.apply_to(&spinner_suffix));
                             io::stdout().flush().ok();
                             frame_idx += 1;
                         }

@@ -118,7 +118,7 @@ impl Engine {
     /// - Read-only tools are dispatched in parallel via `tokio::spawn`.
     ///
     /// Returns `(results, total_tool_count)`.
-    async fn dispatch_tools(&self, calls: Vec<ToolCall>) -> (Vec<(ToolCall, String)>, usize) {
+    async fn dispatch_tools(&self, calls: Vec<ToolCall>, stream_tx: Option<UnboundedSender<String>>) -> (Vec<(ToolCall, String)>, usize) {
         let total = calls.len();
         let needs_serial = calls.iter().any(|c| {
             self.tools.get(&c.name).map(|t| t.requires_confirmation()).unwrap_or(false)
@@ -127,6 +127,9 @@ impl Engine {
         let results = if needs_serial || calls.len() == 1 {
             let mut results = Vec::new();
             for call in calls {
+                if let Some(ref tx) = stream_tx {
+                    let _ = tx.send(format!("\x1b[S🛠️ Executing {}...", call.name));
+                }
                 let result = match self.tools.dispatch(&call.name, call.args.clone()).await {
                     Ok(r)  => r,
                     Err(e) => format!("Error in tool '{}': {}", call.name, e),
@@ -135,11 +138,17 @@ impl Engine {
             }
             results
         } else {
-            println!(
+            let msg = format!(
                 "⚡ {} executing {} read-only tool(s) concurrently in parallel tokio tasks...",
                 style("[Parallel Dispatch]").cyan().bold(),
                 style(calls.len()).bold()
             );
+            if let Some(ref tx) = stream_tx {
+                let _ = tx.send(format!("\x1b[T{}", msg));
+                let _ = tx.send(format!("\x1b[S⚡ Running {} tools concurrently...", calls.len()));
+            } else {
+                println!("{}", msg);
+            }
             let mut handles = Vec::new();
             for call in &calls {
                 let name = call.name.clone();
@@ -196,15 +205,26 @@ impl Engine {
         // 1. Retrieve relevant workspace memories and append them to the system prompt
         let mut final_system_prompt = system_prompt.to_string();
         if let Some(ref mut memory_engine) = self.memory {
+            if let Some(ref tx) = stream_tx {
+                let _ = tx.send("\x02".to_string());
+                let _ = tx.send("\x1b[S🔍 Querying semantic memory (turbovec)...".to_string());
+            }
             if let Ok(workspace_dir) = std::env::current_dir() {
                 let workspace_str = workspace_dir.to_string_lossy().to_string();
                 if let Ok(matches) = memory_engine.search(input, &workspace_str, 5) {
                     if !matches.is_empty() {
+                        if let Some(ref tx) = stream_tx {
+                            let _ = tx.send(format!("\x1b[T🔍 Found {} relevant workspace memories", matches.len()));
+                        }
                         let mut memory_str = String::from("\n\n### RELEVANT MEMORIES (from this workspace):\n");
                         for m in matches {
                             memory_str.push_str(&format!("- {} (similarity: {:.2})\n", m.text, m.score));
                         }
                         final_system_prompt.push_str(&memory_str);
+                    } else {
+                        if let Some(ref tx) = stream_tx {
+                            let _ = tx.send("\x1b[T🔍 No matching memories found in workspace".to_string());
+                        }
                     }
                 }
             }
@@ -261,11 +281,19 @@ impl Engine {
             *steps_out = step;
             tracing::info!(step, max = self.max_iterations, "Agent step");
 
+            if let Some(ref tx) = stream_tx {
+                let _ = tx.send(format!("\x1b[T⚙️ [Iteration {}/{}] Initiating LLM thought cycle...", step, self.max_iterations));
+                let _ = tx.send(format!("\x1b[S🤖 Thinking (step {}/{})...", step, self.max_iterations));
+            }
+
             let (compacted, was_compacted) =
                 self.context.compact_if_needed(self.global_messages.clone());
             if was_compacted {
                 *compaction_fired_out = true;
                 tracing::info!("Context compacted at step {}", step);
+                if let Some(ref tx) = stream_tx {
+                    let _ = tx.send("\x1b[T🧹 [Context Compaction] Shrinking messages list...".to_string());
+                }
             }
             self.global_messages = compacted;
 
@@ -282,12 +310,18 @@ impl Engine {
                 }
 
                 ModelResponse::ToolCalls(calls) => {
-                    println!(
+                    let tool_names = calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ");
+                    let dispatch_msg = format!(
                         "🔧 {} {} tool(s): {}",
                         style("[Dispatching]").magenta(),
                         style(calls.len()).bold(),
-                        calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+                        tool_names
                     );
+                    if let Some(ref tx) = stream_tx {
+                        let _ = tx.send(format!("\x1b[T{}", dispatch_msg));
+                    } else {
+                        println!("{}", dispatch_msg);
+                    }
 
                     let tool_calls_json: Vec<Value> = calls.iter().map(|c| json!({
                         "id": c.id,
@@ -305,7 +339,7 @@ impl Engine {
                         "tools": calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>()
                     }))?;
 
-                    let (results, dispatched) = self.dispatch_tools(calls).await;
+                    let (results, dispatched) = self.dispatch_tools(calls, stream_tx.clone()).await;
                     *tool_calls_out += dispatched;
 
                     for (call, result) in results {

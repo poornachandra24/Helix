@@ -76,6 +76,7 @@ impl AppConfig {
         // 1. If active_provider is not "auto", try to get it.
         if self.active_provider != "auto" {
             if let Some(p) = self.providers.iter().find(|p| p.name == self.active_provider) {
+                println!("📡 Probing active provider: '{}' ({})", p.name, p.base_url);
                 if check_provider_health(client, p).await {
                     return p.clone();
                 } else {
@@ -87,6 +88,10 @@ impl AppConfig {
         // 2. Either active_provider is "auto" or it is offline. Probe all configured providers.
         let mut candidates = Vec::new();
         for p in &self.providers {
+            if self.active_provider != "auto" && p.name == self.active_provider {
+                continue;
+            }
+            println!("📡 Probing candidate provider: '{}' ({})", p.name, p.base_url);
             if check_provider_health(client, p).await {
                 candidates.push(p.clone());
             }
