@@ -1,11 +1,10 @@
 use crate::tools::Tool;
+use crate::tools::sandbox::{SharedSandbox, SandboxBackend, SandboxMode};
 use anyhow::Result;
 use async_trait::async_trait;
 use console::style;
 use dialoguer::Confirm;
 use serde_json::{json, Value};
-use std::path::Path;
-use tokio::process::Command;
 
 const OUTPUT_MAX_BYTES: usize = 8_000;
 
@@ -25,11 +24,18 @@ fn confirm_action(description: &str) -> Result<bool> {
         .interact()?)
 }
 
-// ──────────────────────────────────────────────
 // BashTool
 // ──────────────────────────────────────────────
 
-pub struct BashTool;
+pub struct BashTool {
+    sandbox: SharedSandbox,
+}
+
+impl BashTool {
+    pub fn new(sandbox: SharedSandbox) -> Self {
+        Self { sandbox }
+    }
+}
 
 #[async_trait]
 impl Tool for BashTool {
@@ -58,17 +64,16 @@ impl Tool for BashTool {
             return Ok("User denied execution. Try a different approach.".into());
         }
 
-        tracing::debug!(cmd = %cmd, "Executing bash command");
+        let mode = self.sandbox.get_mode();
+        if mode == SandboxMode::Docker {
+            println!("🐳 {}", style("Running command in sandboxed Docker container (rust:latest)...").cyan());
+        }
 
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
-            .await?;
+        let output = self.sandbox.execute_command(&cmd).await?;
 
-        let stdout = truncate(String::from_utf8_lossy(&output.stdout).into_owned(), "STDOUT");
-        let stderr = truncate(String::from_utf8_lossy(&output.stderr).into_owned(), "STDERR");
-        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout = truncate(output.stdout, "STDOUT");
+        let stderr = truncate(output.stderr, "STDERR");
+        let exit_code = output.exit_code;
 
         Ok(format!("exit_code={}\n{}{}", exit_code, stdout, stderr))
     }
@@ -78,7 +83,15 @@ impl Tool for BashTool {
 // ReadFileTool
 // ──────────────────────────────────────────────
 
-pub struct ReadFileTool;
+pub struct ReadFileTool {
+    sandbox: SharedSandbox,
+}
+
+impl ReadFileTool {
+    pub fn new(sandbox: SharedSandbox) -> Self {
+        Self { sandbox }
+    }
+}
 
 #[async_trait]
 impl Tool for ReadFileTool {
@@ -100,8 +113,7 @@ impl Tool for ReadFileTool {
 
     async fn call(&self, args: Value) -> Result<String> {
         let path = args["path"].as_str().context("'path' is required")?;
-        let content = tokio::fs::read_to_string(path).await
-            .map_err(|e| anyhow::anyhow!("Cannot read '{}': {}", path, e))?;
+        let content = self.sandbox.read_file(path).await?;
 
         let start = args["start_line"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
         let end_raw = args["end_line"].as_u64();
@@ -120,7 +132,15 @@ use anyhow::Context as _;
 // WriteFileTool
 // ──────────────────────────────────────────────
 
-pub struct WriteFileTool;
+pub struct WriteFileTool {
+    sandbox: SharedSandbox,
+}
+
+impl WriteFileTool {
+    pub fn new(sandbox: SharedSandbox) -> Self {
+        Self { sandbox }
+    }
+}
 
 #[async_trait]
 impl Tool for WriteFileTool {
@@ -148,10 +168,7 @@ impl Tool for WriteFileTool {
             return Ok("User denied write. No changes made.".into());
         }
 
-        if let Some(parent) = Path::new(path).parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(path, content).await?;
+        self.sandbox.write_file(path, content).await?;
         Ok(format!("✅ Written {} bytes to '{}'", content.len(), path))
     }
 }
@@ -160,7 +177,15 @@ impl Tool for WriteFileTool {
 // ListDirTool
 // ──────────────────────────────────────────────
 
-pub struct ListDirTool;
+pub struct ListDirTool {
+    sandbox: SharedSandbox,
+}
+
+impl ListDirTool {
+    pub fn new(sandbox: SharedSandbox) -> Self {
+        Self { sandbox }
+    }
+}
 
 #[async_trait]
 impl Tool for ListDirTool {
@@ -182,36 +207,9 @@ impl Tool for ListDirTool {
     async fn call(&self, args: Value) -> Result<String> {
         let path = args["path"].as_str().unwrap_or(".");
         let max_depth = args["depth"].as_u64().unwrap_or(1) as usize;
-        let mut out = String::new();
-        list_dir_recursive(Path::new(path), 0, max_depth, &mut out)?;
+        let out = self.sandbox.list_dir(path, max_depth).await?;
         Ok(truncate(out, "LISTING"))
     }
-}
-
-fn list_dir_recursive(dir: &Path, depth: usize, max_depth: usize, out: &mut String) -> Result<()> {
-    let indent = "  ".repeat(depth);
-    let entries = std::fs::read_dir(dir)?;
-    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        // Skip hidden and build artifacts
-        if name.starts_with('.') || name == "target" || name == "node_modules" {
-            continue;
-        }
-        if path.is_dir() {
-            out.push_str(&format!("{}📁 {}/\n", indent, name));
-            if depth < max_depth {
-                list_dir_recursive(&path, depth + 1, max_depth, out)?;
-            }
-        } else {
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            out.push_str(&format!("{}📄 {} ({}B)\n", indent, name, size));
-        }
-    }
-    Ok(())
 }
 
 // ──────────────────────────────────────────────
@@ -270,13 +268,11 @@ impl Tool for WebFetchTool {
             return Ok(format!("HTTP {} for {}\n{}", status, url, truncate(body, "BODY")));
         }
 
-        // Strip HTML tags with a simple pass (no extra dep needed for basic use)
         let text = strip_html_tags(&body);
         Ok(truncate(text, "PAGE"))
     }
 }
 
-/// Minimal HTML stripper — removes tags, decodes common entities.
 fn strip_html_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len() / 2);
     let mut in_tag = false;
@@ -288,6 +284,5 @@ fn strip_html_tags(html: &str) -> String {
             _ => {}
         }
     }
-    // Collapse whitespace
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }

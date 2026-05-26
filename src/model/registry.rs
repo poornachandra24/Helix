@@ -9,7 +9,6 @@
 
 use reqwest::Client;
 use serde_json::Value;
-use tracing;
 
 use crate::config::{ApiFormat, AppConfig};
 
@@ -27,13 +26,7 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
         return override_val;
     }
 
-    let provider = match config.get_active_provider() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("Could not get active provider for context lookup: {}", e);
-            return FALLBACK_CONTEXT_WINDOW;
-        }
-    };
+    let provider = config.resolve_best_provider(client).await;
 
     let model = &config.active_model;
 

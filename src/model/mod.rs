@@ -1,3 +1,5 @@
+pub mod registry;
+
 use anyhow::Result;
 use async_trait::async_trait;
 
@@ -5,7 +7,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::{ApiFormat, AppConfig};
+use crate::config::{ApiFormat, AppConfig, Provider};
 use crate::tools::ToolDescriptor;
 
 // ──────────────────────────────────────────────
@@ -60,11 +62,16 @@ pub trait ModelAdapter: Send + Sync {
 pub struct OpenAiCompatibleAdapter {
     pub config: AppConfig,
     client: Client,
+    resolved_provider: tokio::sync::Mutex<Option<Provider>>,
 }
 
 impl OpenAiCompatibleAdapter {
     pub fn new(config: AppConfig) -> Self {
-        Self { config, client: Client::new() }
+        Self {
+            config,
+            client: Client::new(),
+            resolved_provider: tokio::sync::Mutex::new(None),
+        }
     }
 
     /// Build the full endpoint URL based on the provider's `ApiFormat`.
@@ -259,7 +266,17 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         tools: Vec<ToolDescriptor>,
         stream_tx: Option<UnboundedSender<String>>,
     ) -> Result<ModelResponse> {
-        let provider = self.config.get_active_provider()?;
+        let mut cache = self.resolved_provider.lock().await;
+        let provider = if let Some(ref p) = *cache {
+            p.clone()
+        } else {
+            let p = self.config.resolve_best_provider(&self.client).await;
+            *cache = Some(p.clone());
+            p
+        };
+        // Drop the lock so it is not held during the request execution
+        drop(cache);
+
         let format = &provider.api_format;
         let endpoint = self.endpoint(&provider.base_url, format);
         let api_key = provider.api_key.as_deref();
@@ -277,7 +294,17 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
 
         tracing::debug!(endpoint = %endpoint, "Calling model");
 
-        let resp: Value = req.send().await?.json().await?;
+        if let Some(ref tx) = stream_tx {
+            let _ = tx.send("\x02".to_string());
+        }
+
+        let resp_res = req.send().await;
+
+        if let Some(ref tx) = stream_tx {
+            let _ = tx.send("\x03".to_string());
+        }
+
+        let resp: Value = resp_res?.json().await?;
         tracing::debug!(response = %resp, "Raw model response");
 
         let model_response = self.parse_response(&resp, format)?;

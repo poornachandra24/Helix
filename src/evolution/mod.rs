@@ -25,7 +25,7 @@ impl EvolutionState {
     }
 }
 
-pub async fn handle_evolve(config: &AppConfig, state: &mut EvolutionState, dry_run: bool) {
+pub async fn handle_evolve(config: &AppConfig, state: &mut EvolutionState, dry_run: bool, auto_approve: bool) {
     let project_root = match env::current_dir() {
         Ok(d) => d,
         Err(e) => { println!("❌ Could not get current dir: {}", e); return; }
@@ -70,9 +70,16 @@ pub async fn handle_evolve(config: &AppConfig, state: &mut EvolutionState, dry_r
     if report.all_pass() {
         println!("{}", style("\nProposed Diff:").bold());
         println!("{}", style(&diff).dim());
-        println!("\nType {} to apply or {} to discard.", style("/approve").green(), style("/reject <reason>").red());
+        
         state.pending_diff = Some(diff);
         state.pending_gate_hash = Some(report.gate_hash);
+
+        if auto_approve {
+            println!("{}", style("⚡ [Auto-Approve] Gates passed. Applying change...").green().bold());
+            handle_approve(config, state).await;
+        } else {
+            println!("\nType {} to apply or {} to discard.", style("/approve").green(), style("/reject <reason>").red());
+        }
     } else {
         println!("{}", style("Mutation rejected by automated gates.").red());
     }

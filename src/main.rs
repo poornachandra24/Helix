@@ -1,37 +1,37 @@
-mod config;
-mod context;
-mod builtins;
-mod engine;
-mod model;
-mod persistence;
-mod tools;
-mod skills;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
-use std::io::{self, Write};
-use console::style;
+
+use helix::{config, cli};
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Interactive Agent CLI", long_about = None)]
+#[command(author, version, about = "Helix — autonomous AI agent CLI", long_about = None)]
 struct Args {
     #[command(subcommand)]
     cmd: Option<Command>,
 
-    /// Increase verbosity (-v for info, -vv for debug)
+    /// Verbosity: -v = info, -vv = debug
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Start an interactive Chat REPL (Default)
+    /// Interactive chat REPL (default)
     Chat,
-    /// Run a single prompt and exit
-    Run { goal: String },
-    /// Configure models and providers interactively
+    /// Run a single goal and exit
+    Run {
+        /// The goal or instruction to execute
+        goal: String,
+    },
+    /// Configure models and providers
     Config,
+    /// Run the benchmark suite against the current model
+    Benchmark {
+        /// Save results as the new baseline
+        #[arg(long)]
+        update_baseline: bool,
+    },
 }
 
 #[tokio::main]
@@ -43,103 +43,32 @@ async fn main() -> Result<()> {
         1 => "info",
         _ => "debug",
     };
-    
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(format!("harness_cli={}", log_level)))
+        .with_env_filter(EnvFilter::new(format!("helix={}", log_level)))
         .with_target(false)
         .init();
 
-    let mut app_config = config::load_config()?;
+    let app_config = config::load_config()?;
 
     match &args.cmd {
         Some(Command::Config) => {
-            println!("Current Provider: {}", app_config.active_provider);
-            println!("Current Model: {}", app_config.active_model);
-            let _ = config::interactive_setup(Some(app_config))?;
+            println!("Current: {} / {}", app_config.active_provider, app_config.active_model);
+            let new_config = config::interactive_setup(Some(app_config))?;
+            println!("✅ Now using: {} / {}", new_config.active_provider, new_config.active_model);
         }
+
         Some(Command::Run { goal }) => {
-            run_single(app_config, goal.to_string(), args.verbose).await?;
+            cli::run::run_single(&app_config, goal).await?;
         }
+
+        Some(Command::Benchmark { update_baseline }) => {
+            cli::bench::run_benchmark(&app_config, *update_baseline).await?;
+        }
+
         Some(Command::Chat) | None => {
-            // Interactive Chat REPL (Session Management)
-            println!("{}", style("========================================================").dim());
-            println!("💬 {}", style("Harness Interactive Session Started").bold().cyan());
-            println!("🤖 Provider: {}", style(&app_config.active_provider).green());
-            println!("🧠 Model:    {}", style(&app_config.active_model).green());
-            println!("Commands: {} to switch models, {} to quit", style("'/config'").yellow(), style("'exit'").yellow());
-            println!("{}", style("========================================================").dim());
-
-            let session = persistence::Session::new(None)?;
-            let mut registry = tools::ToolRegistry::new();
-            registry.register(Box::new(builtins::BashTool));
-            
-            let data_dir = config::get_data_dir()?;
-            let skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
-            let skills_prompt = skill_reg.load_skills_prompt().unwrap_or_default();
-            let base_system_prompt = "You are an autonomous AI agent with access to tools. To complete the user's goal, you MUST use the tools provided. Once you have the final result, provide a conversational answer.";
-            let system_prompt = format!("{}{}", base_system_prompt, skills_prompt);
-
-            let model_adapter = model::OllamaAdapter::new(app_config.clone());
-            let mut engine = engine::Engine::new(model_adapter, context::ContextManager::new(), registry, session);
-
-            loop {
-                print!("\n{} ", style(">").bold().blue());
-                io::stdout().flush()?;
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-                let trimmed = input.trim();
-
-                if trimmed == "exit" || trimmed == "quit" {
-                    break;
-                }
-                if trimmed == "/config" {
-                    let new_config = config::interactive_setup(Some(app_config.clone()))?;
-                    app_config = new_config.clone();
-                    engine.model.config = new_config;
-                    println!("{}", style(format!("✅ Seamlessly switched to {} ({})", app_config.active_provider, app_config.active_model)).green());
-                    continue;
-                }
-                if trimmed.is_empty() {
-                    continue;
-                }
-
-                tokio::select! {
-                    res = engine.run_turn(&system_prompt, trimmed) => {
-                        match res {
-                            Ok(final_result) => println!("\n🤖 {}", style(final_result).green()),
-                            Err(e) => println!("\n❌ {}", style(format!("Error: {}", e)).red()),
-                        }
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-                        println!("\n{}", style("[⛔ Request Cancelled by User]").red().bold());
-                        // The engine future is dropped, gracefully terminating any pending HTTP requests
-                    }
-                }
-            }
+            cli::repl::run_repl(app_config).await?;
         }
     }
 
-    Ok(())
-}
-
-async fn run_single(app_config: config::AppConfig, goal: String, verbosity: u8) -> Result<()> {
-    let session = persistence::Session::new(None)?;
-    let mut registry = tools::ToolRegistry::new();
-    registry.register(Box::new(builtins::BashTool));
-
-    let data_dir = config::get_data_dir()?;
-    let skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
-    let skills_prompt = skill_reg.load_skills_prompt().unwrap_or_default();
-    
-    let base_system_prompt = "You are an autonomous AI agent with access to tools. To complete the user's goal, you MUST use the tools provided. Once you have the final result, provide a conversational answer.";
-    let system_prompt = format!("{}{}", base_system_prompt, skills_prompt);
-
-    let model = model::OllamaAdapter::new(app_config);
-    let mut engine = engine::Engine::new(model, context::ContextManager::new(), registry, session);
-    
-    println!("🚀 Starting Agent... (verbosity: {})\n", verbosity);
-    let final_result = engine.run_turn(&system_prompt, &goal).await?;
-    
-    println!("\n✅ Final Result: {}", final_result);
     Ok(())
 }

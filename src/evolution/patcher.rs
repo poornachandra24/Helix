@@ -3,7 +3,7 @@ use console::style;
 use std::path::Path;
 use tokio::process::Command;
 
-use crate::bench::BenchmarkRunner;
+use crate::cli::bench::BenchmarkRunner;
 use crate::config::AppConfig;
 
 pub struct Patcher;

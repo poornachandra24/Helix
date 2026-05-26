@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::config::AppConfig;
-use crate::context::ContextManager;
-use crate::engine::Engine;
-use crate::metrics::{MetricsCollector, SessionSummary};
+use crate::core::context::{ContextManager, ContextBudget};
+use crate::core::engine::Engine;
+use crate::core::metrics::{MetricsCollector, SessionSummary};
 use crate::model::OpenAiCompatibleAdapter;
-use crate::persistence::Session;
+use crate::core::persistence::Session;
 use crate::tools::ToolRegistry;
-use crate::{builtins, context};
+use crate::tools::builtins;
 
 // ──────────────────────────────────────────────
 // Benchmark case schema
@@ -165,7 +165,7 @@ impl BenchmarkRunner {
         let system  = "You are an autonomous AI agent. Use the provided tools to answer the user. \
                        Be concise. When you have the answer, respond without calling any more tools.";
 
-        let lookup  = crate::model_registry::build_lookup_client();
+        let lookup  = crate::model::registry::build_lookup_client();
         let context = build_bench_context(&self.config, system, &tools.descriptors(), &lookup).await;
         let model   = Box::new(OpenAiCompatibleAdapter::new(self.config.clone()));
 
@@ -364,8 +364,9 @@ fn print_case_result(r: &CaseResult) {
 /// Excludes BashTool (requires confirmation) and WriteFileTool (mutates state).
 fn build_bench_registry() -> ToolRegistry {
     let mut r = ToolRegistry::new();
-    r.register(builtins::ReadFileTool);
-    r.register(builtins::ListDirTool);
+    let sandbox = crate::tools::sandbox::SharedSandbox::new(crate::tools::sandbox::SandboxMode::Local);
+    r.register(builtins::ReadFileTool::new(sandbox.clone()));
+    r.register(builtins::ListDirTool::new(sandbox));
     // BashTool and WriteFileTool intentionally excluded from benchmarks
     r
 }
@@ -376,8 +377,8 @@ async fn build_bench_context(
     tools: &[crate::tools::ToolDescriptor],
     client: &reqwest::Client,
 ) -> ContextManager {
-    let window = crate::model_registry::resolve_context_window(config, client).await;
-    let budget = context::ContextBudget::new(window, system, tools, config.effective_headroom());
+    let window = crate::model::registry::resolve_context_window(config, client).await;
+    let budget = ContextBudget::new(window, system, tools, config.effective_headroom());
     ContextManager::new(budget)
 }
 
@@ -400,4 +401,21 @@ fn read_tools_from_session(path: &Path) -> Vec<String> {
         }
     }
     tools
+}
+
+pub async fn run_benchmark(config: &crate::config::AppConfig, update_baseline: bool) -> Result<()> {
+    let project_root = std::env::current_dir()?;
+    let suite_dir = project_root.join("benchmarks").join("suite");
+    let baseline_path = project_root.join("benchmarks").join("baseline.json");
+
+    let runner = BenchmarkRunner::new(&suite_dir, &baseline_path, config.clone());
+    let (results, summary) = runner.run().await?;
+
+    if update_baseline {
+        runner.update_baseline(&results, &summary)?;
+    } else {
+        let report = runner.check_regression(&results, &summary);
+        report.print();
+    }
+    Ok(())
 }

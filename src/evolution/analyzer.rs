@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use crate::metrics::SessionSummary;
+use crate::core::metrics::SessionSummary;
 use std::fs;
 
 pub struct Analyzer {
