@@ -19,5 +19,5 @@ Welcome to the Helix developer documentation. This directory contains detailed a
 
 4.  **[Terminal UI Design System](ux_design.md)**
     *   Covers dynamic terminal-width layout, box math formulas, color token definitions, and word-wrap implementation.
-    *   Documents the two-tone conversation box scheme (indigo `You` / amber `Helix`), post-response footnote format, SONA quality footnote, and agent loop counter.
+    *   Documents the two-tone conversation box scheme (blue `You` / yellow `Helix`), post-response footnote format, SONA quality footnote, and agent loop counter.
     *   Explains why top borders are split into separate `print!` calls to prevent ANSI color bleed.

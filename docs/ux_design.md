@@ -68,18 +68,15 @@ println!("{}", border_color.apply_to(format!("╭── {} {}╮",
 
 ### Startup banner (`src/cli/helpers.rs :: print_banner`)
 
-| Element | `color256` | Description |
-|---------|-----------|-------------|
-| Logo line 1 | 81 | Soft cyan |
-| Logo line 2 | 75 | Sky blue |
-| Logo line 3 | 111 | Pastel blue |
-| Logo line 4 | 147 | Soft lavender |
-| Logo line 5 | 183 | Soft violet/pink |
-| Box border | 240 | Subtle dark grey |
-| Label keys | 248 | Light grey |
-| Label values | 253 | Bright white |
-| Status indicator `●` | 46 | Matrix green |
-| `/help` hint | 51 | Cyber cyan |
+| Element | Color | Description |
+|---------|-------|-------------|
+| Logo | Cyan (Bold) | Adaptive cyan |
+| Box border & separators | DarkGrey | Subtle borders |
+| Keys / Labels | DarkGrey (Bold) | Muted key labels |
+| Values | White | White content text |
+| Status indicator `●` | Cyan (Bold) | Header status dot |
+| Status text | Green (Bold) | Online status indicator |
+| `/help` hint | Cyan | Cyber cyan |
 
 ### User Input box (`src/cli/repl.rs`)
 

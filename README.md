@@ -41,7 +41,7 @@ Helix uses a two-tone boxed conversation layout:
 
 Both boxes use rounded Unicode corners (`╭ ╮ ╰ ╯`) and display a `[Elapsed: X.XXs]` timer on the closing border.
 
-**Post-response footnotes** (dim `color256(240)`, printed after the box closes):
+**Post-response footnotes** (dimmed/adaptive, printed after the box closes):
 ```
   ◆ Memory: Found N relevant workspace memories (adapted via Micro-LoRA)
   · loop 1/20
