@@ -14,6 +14,7 @@ pub fn print_banner(
     session_id: &str,
     memory_size: usize,
     patterns_count: usize,
+    context_limit: usize,
 ) {
     use comfy_table::{Table, Cell, CellAlignment, ColumnConstraint, Width, Color, Attribute};
     use comfy_table::presets::UTF8_BORDERS_ONLY;
@@ -21,16 +22,47 @@ pub fn print_banner(
     use owo_colors::OwoColorize;
 
     let logo_lines = [
-        "    __  __   ______   __       ____  __  __",
-        "   / / / /  / ____/  / /      /  _/  \\ \\/ /",
-        "  / /_/ /  / __/    / /       / /     \\  / ",
-        " / __  /  / /___   / /___   _/ /      /  \\ ",
-        "/_/ /_/  /_____/  /_____/  /___/     /_/\\_\\",
+        "   ██╗  ██╗███████╗██╗     ██╗██╗  ██╗",
+        "   ██║  ██║██╔════╝██║     ██║╚██╗██╔╝",
+        "   ███████║█████╗  ██║     ██║ ╚███╔╝ ",
+        "   ██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ",
+        "   ██║  ██║███████╗███████╗██║██╔╝ ██╗",
+        "   ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝",
     ];
 
     println!();
-    for line in logo_lines {
-        println!("{}", line.cyan().bold());
+    // Print logo side-by-side with evolution status indicators
+    let dev_env = std::path::Path::new("Cargo.toml").exists();
+
+    let neural_status = if patterns_count > 0 {
+        format!("{} patterns adapted", patterns_count).green().bold().to_string()
+    } else {
+        "initialized".dimmed().to_string()
+    };
+
+    let mutation_status = if dev_env {
+        "active".green().bold().to_string()
+    } else {
+        "unavailable (dev only)".dimmed().to_string()
+    };
+
+    let gates_status = if dev_env {
+        "armed".red().bold().to_string()
+    } else {
+        "inactive".dimmed().to_string()
+    };
+
+    let status_lines = [
+        "".to_string(),
+        format!("   🧬 {}", "SELF-EVOLUTION LOOP:".bold().white()),
+        format!("    ├─ Neural Adaptation: {}", neural_status),
+        format!("    ├─ Code Mutation:     {}", mutation_status),
+        format!("    └─ Security Gates:    {}", gates_status),
+        "".to_string(),
+    ];
+
+    for (line, status) in logo_lines.iter().zip(status_lines.iter()) {
+        println!("{}{}", line.cyan().bold(), status);
     }
     println!();
 
@@ -39,6 +71,17 @@ pub fn print_banner(
     let ws = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "Unknown".to_string());
+
+    let mut formatted_limit = String::new();
+    let limit_str = context_limit.to_string();
+    for (i, c) in limit_str.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            formatted_limit.push(',');
+        }
+        formatted_limit.push(c);
+    }
+    let formatted_limit: String = formatted_limit.chars().rev().collect();
+    let context_str = format!("{} tokens", formatted_limit);
 
     let mut table = Table::new();
     table.load_preset(UTF8_BORDERS_ONLY);
@@ -64,7 +107,7 @@ pub fn print_banner(
         Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
     ]);
 
-    // Row 3, 4, 5: Provider, Model, Workspace
+    // Row 3, 4, 5: Provider, Model, Context Limit, Workspace
     table.add_row(vec![
         Cell::new("PROVIDER").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
         Cell::new(provider).fg(Color::White),
@@ -72,6 +115,10 @@ pub fn print_banner(
     table.add_row(vec![
         Cell::new("MODEL").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
         Cell::new(model).fg(Color::White),
+    ]);
+    table.add_row(vec![
+        Cell::new("CONTEXT LIMIT").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&context_str).fg(Color::Cyan).add_attribute(Attribute::Bold),
     ]);
     table.add_row(vec![
         Cell::new("WORKSPACE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
@@ -165,7 +212,7 @@ pub async fn build_context(
     tools: &[tools::ToolDescriptor],
     lookup_client: &reqwest::Client,
 ) -> context::ContextManager {
-    let model_window = model_registry::resolve_and_report(config, lookup_client).await;
+    let model_window = model_registry::resolve_context_window(config, lookup_client).await;
 
     let budget = context::ContextBudget::new(
         model_window,

@@ -90,7 +90,7 @@ fn print_help() {
     ]);
 
     let bench = vec![
-        ("/benchmark", "run benchmark suite"),
+        ("/benchmark [--local]", "run benchmark suite (use --local for offline CPU/memory microbenches)"),
         ("/save-baseline", "save current benchmark as new baseline"),
     ];
     for (cmd, desc) in bench {
@@ -153,7 +153,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
     // Print combined startup banner with all session details in a single card
     let memory_size = engine.memory.as_ref().map(|m| m.size()).unwrap_or(0);
     let patterns_count = engine.sona.as_ref().map(|s| s.stats().patterns_stored).unwrap_or(0);
-    print_banner(&app_config, &engine.session.id, memory_size, patterns_count);
+    print_banner(&app_config, &engine.session.id, memory_size, patterns_count, engine.context.budget.model_window);
 
     loop {
         print!("\n{} ", style(">").bold().blue());
@@ -505,7 +505,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             let thinking_style_fn = |s: &str| s.dimmed().to_string();
             let spinner_style_fn = |s: &str| s.cyan().bold().to_string();
 
-            let mut telemetry_msgs = Vec::new();
+
             let start_time = std::time::Instant::now();
             let mut full_response = String::new();
 
@@ -530,7 +530,8 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                                         io::stdout().flush().ok();
                                     }
                                     let msg = token.strip_prefix("\x1b[T").unwrap_or("");
-                                    telemetry_msgs.push(msg.to_string());
+                                    println!("{}", msg);
+                                    io::stdout().flush().ok();
                                 } else {
                                     show_spinner = false;
                                     full_response.push_str(&token);
@@ -594,11 +595,6 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     border_color_fn("╯")
                 );
                 println!("{}", bottom);
-            }
-
-            // Print telemetry after closing the box
-            for msg in telemetry_msgs {
-                println!("{}", msg);
             }
             io::stdout().flush().ok();
         });
