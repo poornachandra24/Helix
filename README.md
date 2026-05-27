@@ -5,23 +5,32 @@ Designed as a research-grade engine giving you absolute control over agent loops
 
 ---
 
-## 🧬 Self-Evolving Architecture (Security First)
+## 🧬 Self-Evolving Architecture
 
-Helix is designed to optimize its own codebase without ever regressing or compromising your machine's security.
+Helix runs two distinct self-optimization loops depending on the environment (development vs. production distribution):
 
-- **Metrics Tracking**: Records detailed telemetry for every agent turn (latency, token efficiency, tool accuracy, heuristic compaction events, and syntax retries).
-- **Automated Proposer (`/evolve`)**: Analyzes recent session bottlenecks and uses an LLM to propose a focused unified diff to improve the engine.
-- **Immutable Security Gates**: Proposed patches are scanned to reject unsafe operations (e.g., `unsafe` blocks, raw process spawns, network clients) and prevent mutations to security logic itself via `.evolution-lock`.
-- **No-Regression Contract**: If a patch passes security and compilation gates, it runs against the headless Benchmark Suite. If any metric drops below `baseline.json`, Helix automatically issues a `git revert`.
-- **Human-in-the-Loop (`/approve`)**: Helix can *never* self-authorize code changes. A human must explicitly type `/approve` to finalize the evolution.
+### 1. Neural-Level Adaptation (SONA - Self-Optimizing Neural Architecture)
+*   **Availability**: Continuous in all environments (runs out-of-the-box, no toolchain needed).
+*   **Mechanism**: After every chat turn, the SONA engine computes a trajectory quality score based on steps, tool errors, and healer corrects. It then performs real-time Micro-LoRA (Low-Rank Adaptation) weight updates on the query vector.
+*   **Benefit**: Keeps semantic memory retrieval dynamically tuned to your specific workspace files and coding habits.
+
+### 2. Code-Level Self-Evolution (`/evolve`)
+*   **Availability**: Local Development Mode (requires the Git source repository and the Rust toolchain/`cargo`).
+*   **Mechanism**:
+    1.  **Bottleneck Analysis**: Analyzes local session telemetry (latency, token waste, tool correction rates).
+    2.  **LLM Patch Proposal**: Prompts the Large Language Model (LLM) to write a targeted patch (unified diff) addressing the performance bottlenecks.
+    3.  **Compilation & Linter Gate**: Helix applies the patch and runs `cargo check`, `cargo test`, and `cargo clippy`. If any error or warning is introduced, the patch is rejected.
+    4.  **Immutable Security Scan**: Rejects patches introducing `unsafe` code blocks, spawning unauthorized processes, or mutating locked core safety modules.
+    5.  **No-Regression Benchmark**: Executes the headless benchmark suite against `benchmarks/baseline.json`. If performance declines, it rolls back changes.
+    6.  **Human Gate (`/approve`)**: Helix cannot self-authorize changes; an operator must manually review the diff and type `/approve` to hard-commit the patch to Git.
 
 ---
 
 ## 🚀 Core Features
 
-- **Local Semantic Memory**: Powered by `turbovec` (4-bit Lloyd-Max quantized SIMD index) and `fastembed` (offline ONNX `BAAI/bge-small-en-v1.5`), paired with SQLite metadata. Baseline footprint ~227 MiB RSS, scaling at ~3.2 MiB per 100k memories. See [docs/memory_architecture.md](docs/memory_architecture.md).
+- **Local Semantic Memory**: Powered by `turbovec` (a 4-bit Lloyd-Max quantized SIMD [Single Instruction, Multiple Data] vector index) and `fastembed` (offline ONNX [Open Neural Network Exchange] `BAAI/bge-small-en-v1.5` embeddings), paired with SQLite metadata. Baseline footprint ~227 MiB RSS, scaling at ~3.2 MiB per 100k memories. See [docs/memory_architecture.md](docs/memory_architecture.md).
 - **SONA Neural Adaptation**: After every turn, the SONA engine records a trajectory quality score (0–1) and applies Micro-LoRA weight updates to the semantic memory query path — making retrieval progressively better-tuned to your workspace over time.
-- **Model Agnostic & Seamless Swapping**: Compatible with any OpenAI-compatible API (OpenAI, OpenRouter) and Ollama native format. Switch mid-session using `/use`.
+- **Model Agnostic & Seamless Swapping**: Compatible with any OpenAI-compatible API (Application Programming Interface) provider (OpenAI, OpenRouter) and Ollama native format. Switch mid-session using `/use`.
 - **"Local Healer" Engine**: Intercepts malformed tool-calling JSON from open-weights models and automatically prompts for self-correction (up to 3 retries).
 - **Secure Tool Execution**: Built-in `bash` tool with strict interactive confirmation — the agent cannot execute shell operations without explicit approval.
 - **Markdown Fallback Parsing**: Extracts and executes tool calls encoded in ` ```json ``` ` markdown blocks if a model bypasses official API tool calls.
