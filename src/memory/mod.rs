@@ -62,6 +62,22 @@ impl HelixMemoryEngine {
             index_path,
         })
     }
+
+    /// Return the count of stored memories.
+    pub fn size(&self) -> usize {
+        self.db
+            .query_row("SELECT COUNT(*) FROM memory_metadata", [], |row| row.get(0))
+            .unwrap_or(0)
+    }
+
+    /// Embed a single text string using fastembed.
+    pub fn embed_text(&mut self, text: &str) -> anyhow::Result<Vec<f32>> {
+        let embeddings = self.embedder.embed(vec![text], None)?;
+        if embeddings.is_empty() {
+            anyhow::bail!("Failed to generate embedding");
+        }
+        Ok(embeddings[0].clone())
+    }
     
     /// Insert a memory item: generates an embedding, stores metadata in SQLite,
     /// and indexes the quantized vector under the generated ID.
@@ -93,6 +109,7 @@ impl HelixMemoryEngine {
     pub fn search(
         &mut self,
         query: &str,
+        sona: Option<&ruvector_sona::SonaEngine>,
         workspace_path: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<MemoryMatch>> {
@@ -104,7 +121,13 @@ impl HelixMemoryEngine {
         if embeddings.is_empty() {
             anyhow::bail!("Failed to embed search query");
         }
-        let query_vector = &embeddings[0];
+        let mut query_vector = embeddings[0].clone();
+        
+        if let Some(sona_engine) = sona {
+            let mut optimized = vec![0.0f32; 384];
+            sona_engine.apply_micro_lora(&query_vector, &mut optimized);
+            query_vector = optimized;
+        }
         
         // Retrieve candidate row IDs for the active workspace
         let mut stmt = self.db.prepare(
@@ -125,7 +148,7 @@ impl HelixMemoryEngine {
             return Ok(Vec::new());
         }
         
-        let (scores, ids) = self.index.search_with_allowlist(query_vector, limit, Some(&allowed_ids));
+        let (scores, ids) = self.index.search_with_allowlist(&query_vector, limit, Some(&allowed_ids));
         
         let mut matches = Vec::new();
         for (score, id) in scores.into_iter().zip(ids.into_iter()) {
@@ -198,18 +221,18 @@ mod tests {
         engine.insert("Cargo is the Rust package manager that downloads dependencies.", None, workspace_b).unwrap();
 
         // Test search in workspace A
-        let matches_a = engine.search("What is safety and speed in programming?", workspace_a, 5).unwrap();
+        let matches_a = engine.search("What is safety and speed in programming?", None, workspace_a, 5).unwrap();
         assert!(!matches_a.is_empty(), "Should return matches in workspace A");
         assert!(matches_a[0].text.contains("Rust"), "Best match should be about Rust");
 
         // Test workspace isolation: search for Cargo in workspace A (should find nothing from workspace B)
-        let matches_cargo_a = engine.search("package manager", workspace_a, 5).unwrap();
+        let matches_cargo_a = engine.search("package manager", None, workspace_a, 5).unwrap();
         for m in &matches_cargo_a {
             assert!(!m.text.contains("Cargo"), "Should not find workspace B memories in workspace A");
         }
 
         // Test search in workspace B
-        let matches_cargo_b = engine.search("package manager", workspace_b, 5).unwrap();
+        let matches_cargo_b = engine.search("package manager", None, workspace_b, 5).unwrap();
         assert!(!matches_cargo_b.is_empty(), "Should find matches in workspace B");
         assert!(matches_cargo_b[0].text.contains("Cargo"), "Best match should be about Cargo");
 
@@ -218,17 +241,17 @@ mod tests {
         drop(engine);
 
         let mut reloaded = HelixMemoryEngine::new(temp_dir.path()).unwrap();
-        let matches_reload = reloaded.search("What is safety and speed in programming?", workspace_a, 5).unwrap();
+        let matches_reload = reloaded.search("What is safety and speed in programming?", None, workspace_a, 5).unwrap();
         assert!(!matches_reload.is_empty());
         assert!(matches_reload[0].text.contains("Rust"));
 
         // Test clearing workspace A
         reloaded.clear_workspace(workspace_a).unwrap();
-        let matches_cleared = reloaded.search("safety and speed", workspace_a, 5).unwrap();
+        let matches_cleared = reloaded.search("safety and speed", None, workspace_a, 5).unwrap();
         assert!(matches_cleared.is_empty(), "Workspace A should be empty");
 
         // Workspace B should still be intact
-        let matches_intact = reloaded.search("package manager", workspace_b, 5).unwrap();
+        let matches_intact = reloaded.search("package manager", None, workspace_b, 5).unwrap();
         assert!(!matches_intact.is_empty(), "Workspace B should still have memories");
     }
 }

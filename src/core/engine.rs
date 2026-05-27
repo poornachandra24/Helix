@@ -3,6 +3,7 @@ use console::style;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
+use ruvector_sona::SonaEngine;
 
 use super::context::ContextManager;
 use super::metrics::{MetricsCollector, TurnTimer};
@@ -24,6 +25,8 @@ pub struct Engine {
     pub metrics: Option<MetricsCollector>,
     /// TurboQuant-powered local semantic memory store.
     pub memory: Option<crate::memory::HelixMemoryEngine>,
+    /// SONA self-optimizing engine.
+    pub sona: Option<SonaEngine>,
 }
 
 impl Engine {
@@ -43,6 +46,7 @@ impl Engine {
             max_retries: 3,
             metrics: None,
             memory: None,
+            sona: None,
         }
     }
 
@@ -53,6 +57,11 @@ impl Engine {
 
     pub fn with_metrics(mut self, collector: MetricsCollector) -> Self {
         self.metrics = Some(collector);
+        self
+    }
+
+    pub fn with_sona(mut self, sona: SonaEngine) -> Self {
+        self.sona = Some(sona);
         self
     }
 
@@ -128,7 +137,7 @@ impl Engine {
             let mut results = Vec::new();
             for call in calls {
                 if let Some(ref tx) = stream_tx {
-                    let _ = tx.send(format!("\x1b[S🛠️ Executing {}...", call.name));
+                    let _ = tx.send(format!("\x1b[SExecuting {}...", call.name));
                 }
                 let result = match self.tools.dispatch(&call.name, call.args.clone()).await {
                     Ok(r)  => r,
@@ -139,13 +148,14 @@ impl Engine {
             results
         } else {
             let msg = format!(
-                "⚡ {} executing {} read-only tool(s) concurrently in parallel tokio tasks...",
-                style("[Parallel Dispatch]").cyan().bold(),
+                "{} {} Tool: Executing {} read-only tool(s) concurrently in parallel tasks",
+                style("  │  ").color256(240),
+                style("⚙").color256(220),
                 style(calls.len()).bold()
             );
             if let Some(ref tx) = stream_tx {
                 let _ = tx.send(format!("\x1b[T{}", msg));
-                let _ = tx.send(format!("\x1b[S⚡ Running {} tools concurrently...", calls.len()));
+                let _ = tx.send(format!("\x1b[SRunning {} tools concurrently...", calls.len()));
             } else {
                 println!("{}", msg);
             }
@@ -199,6 +209,13 @@ impl Engine {
         let mut turn_compaction_fired  = false;
         let mut turn_steps: usize        = 0;
 
+        let query_embedding = if let Some(ref mut memory_engine) = self.memory {
+            memory_engine.embed_text(input).unwrap_or_else(|_| vec![0.0; 384])
+        } else {
+            vec![0.0; 384]
+        };
+        let sona_trajectory = self.sona.as_ref().map(|s| s.begin_trajectory(query_embedding));
+
         self.global_messages.push(json!({"role": "user", "content": input}));
         self.session.append(json!({"event": "user_input", "content": input}))?;
 
@@ -207,14 +224,26 @@ impl Engine {
         if let Some(ref mut memory_engine) = self.memory {
             if let Some(ref tx) = stream_tx {
                 let _ = tx.send("\x02".to_string());
-                let _ = tx.send("\x1b[S🔍 Querying semantic memory (turbovec)...".to_string());
+                let _ = tx.send("\x1b[SQuerying semantic memory...".to_string());
             }
             if let Ok(workspace_dir) = std::env::current_dir() {
                 let workspace_str = workspace_dir.to_string_lossy().to_string();
-                if let Ok(matches) = memory_engine.search(input, &workspace_str, 5) {
+                if let Ok(matches) = memory_engine.search(input, self.sona.as_ref(), &workspace_str, 5) {
                     if !matches.is_empty() {
                         if let Some(ref tx) = stream_tx {
-                            let _ = tx.send(format!("\x1b[T🔍 Found {} relevant workspace memories", matches.len()));
+                            let bullet = style("◆").color256(81);
+                            let sona_hint = if self.sona.is_some() {
+                                format!(" {}", style("(adapted via Micro-LoRA)").color256(243))
+                            } else {
+                                String::new()
+                            };
+                            let msg = format!(
+                                "  {} Memory: Found {} relevant workspace memories{}",
+                                bullet,
+                                style(matches.len()).bold().color256(253),
+                                sona_hint
+                            );
+                            let _ = tx.send(format!("\x1b[T{}", msg));
                         }
                         let mut memory_str = String::from("\n\n### RELEVANT MEMORIES (from this workspace):\n");
                         for m in matches {
@@ -223,13 +252,19 @@ impl Engine {
                         final_system_prompt.push_str(&memory_str);
                     } else {
                         if let Some(ref tx) = stream_tx {
-                            let _ = tx.send("\x1b[T🔍 No matching memories found in workspace".to_string());
+                            let bullet = style("◇").color256(244);
+                            let msg = format!(
+                                "  {} Memory: No matching memories found in workspace",
+                                bullet
+                            );
+                            let _ = tx.send(format!("\x1b[T{}", msg));
                         }
                     }
                 }
             }
         }
 
+        let stream_tx_clone = stream_tx.clone();
         let result = self.run_turn_inner(
             &final_system_prompt,
             stream_tx,
@@ -265,6 +300,54 @@ impl Engine {
             collector.record(m);
         }
 
+        // Finalize SONA Trajectory
+        if let (Some(ref sona_engine), Some(mut trajectory)) = (self.sona.as_ref(), sona_trajectory) {
+            let is_err = result.is_err();
+            let mut quality = 1.0f32;
+            quality -= (turn_healer_retries as f32) * 0.15;
+            if turn_compaction_fired {
+                quality -= 0.20;
+            }
+            let step_penalty = (turn_steps as f32 / 20.0).min(0.3);
+            quality -= step_penalty;
+            if is_err {
+                quality = 0.0;
+            }
+            let final_quality = quality.clamp(0.0, 1.0);
+
+            let mut activations = vec![0.0f32; 384];
+            activations[0] = turn_steps as f32;
+            activations[1] = turn_healer_retries as f32;
+            trajectory.add_step(activations, vec![], final_quality);
+            trajectory.set_model_route(self.model.model_name());
+
+            sona_engine.end_trajectory(trajectory, final_quality);
+            if let Some(ref tx) = stream_tx_clone {
+                let sona_tag = style("sona").color256(242);
+                let quality_colored = if final_quality > 0.8 {
+                    style(format!("{:.2}", final_quality)).green()
+                } else if final_quality > 0.5 {
+                    style(format!("{:.2}", final_quality)).yellow()
+                } else {
+                    style(format!("{:.2}", final_quality)).red()
+                };
+                let _ = tx.send(format!(
+                    "\x1b[T  {} [sona] quality {}",
+                    style("·").color256(242), quality_colored
+                ));
+                if let Some(log_msg) = sona_engine.tick() {
+                    let _ = tx.send(format!(
+                        "\x1b[T  {} Background loop tick: {}",
+                        sona_tag, style(log_msg).color256(117)
+                    ));
+                }
+            } else {
+                if let Some(log_msg) = sona_engine.tick() {
+                    tracing::info!("{}", log_msg);
+                }
+            }
+        }
+
         result
     }
 
@@ -282,8 +365,10 @@ impl Engine {
             tracing::info!(step, max = self.max_iterations, "Agent step");
 
             if let Some(ref tx) = stream_tx {
-                let _ = tx.send(format!("\x1b[T⚙️ [Iteration {}/{}] Initiating LLM thought cycle...", step, self.max_iterations));
-                let _ = tx.send(format!("\x1b[S🤖 Thinking (step {}/{})...", step, self.max_iterations));
+                // Compact dim label — no trailing dashes
+                let loop_label = style(format!("  · loop {}/{}", step, self.max_iterations)).color256(240);
+                let _ = tx.send(format!("\x1b[T{}", loop_label));
+                let _ = tx.send(format!("\x1b[SWorking (loop {}/{})...", step, self.max_iterations));
             }
 
             let (compacted, was_compacted) =
@@ -292,7 +377,10 @@ impl Engine {
                 *compaction_fired_out = true;
                 tracing::info!("Context compacted at step {}", step);
                 if let Some(ref tx) = stream_tx {
-                    let _ = tx.send("\x1b[T🧹 [Context Compaction] Shrinking messages list...".to_string());
+                    let msg = format!(
+                        "  Compact: shrinking message history"
+                    );
+                    let _ = tx.send(format!("\x1b[T{}", msg));
                 }
             }
             self.global_messages = compacted;
@@ -306,16 +394,17 @@ impl Engine {
                 ModelResponse::EndTurn(text) => {
                     self.session.append(json!({"event": "end_turn", "content": &text}))?;
                     self.global_messages.push(json!({"role": "assistant", "content": &text}));
+                    
                     return Ok(text);
                 }
 
                 ModelResponse::ToolCalls(calls) => {
                     let tool_names = calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ");
                     let dispatch_msg = format!(
-                        "🔧 {} {} tool(s): {}",
-                        style("[Dispatching]").magenta(),
-                        style(calls.len()).bold(),
-                        tool_names
+                        "  {} Tool: dispatching {} → {}",
+                        style("⦿").color256(220),
+                        style(calls.len()).bold().color256(253),
+                        style(&tool_names).cyan().bold()
                     );
                     if let Some(ref tx) = stream_tx {
                         let _ = tx.send(format!("\x1b[T{}", dispatch_msg));
@@ -350,6 +439,23 @@ impl Engine {
                             "result": &result,
                         }))?;
 
+                        if let Some(ref tx) = stream_tx {
+                            let check = style("✓").color256(46);
+                            let status_text = if result.contains("Error") || result.contains("failed") {
+                                style("failed").red().bold()
+                            } else {
+                                style("completed").green()
+                            };
+                            let msg = format!(
+                                "  {} '{}' {} ({} bytes)",
+                                check,
+                                style(&call.name).cyan(),
+                                status_text,
+                                result.len()
+                            );
+                            let _ = tx.send(format!("\x1b[T{}", msg));
+                        }
+
                         // Truncate massively long tool outputs to prevent context window overflow / 500 errors
                         let max_chars = 16_000;
                         let content = if result.len() > max_chars {
@@ -366,6 +472,12 @@ impl Engine {
                             "tool_call_id": call.id,
                             "content":      content,
                         }));
+                    }
+
+                    // Close the step box for this tool-use step
+                    if let Some(ref tx) = stream_tx {
+                        let footer = style("  └──────────────────────────────────────────────────────────").color256(240);
+                        let _ = tx.send(format!("\x1b[T{}", footer));
                     }
                 }
 

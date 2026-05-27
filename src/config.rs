@@ -62,6 +62,7 @@ pub struct AppConfig {
     pub sandbox_mode: SandboxMode,
 }
 
+
 impl AppConfig {
     #[allow(dead_code)]
     pub fn get_active_provider(&self) -> Result<Provider> {
@@ -76,11 +77,11 @@ impl AppConfig {
         // 1. If active_provider is not "auto", try to get it.
         if self.active_provider != "auto" {
             if let Some(p) = self.providers.iter().find(|p| p.name == self.active_provider) {
-                println!("📡 Probing active provider: '{}' ({})", p.name, p.base_url);
+                tracing::info!("Probing active provider '{}' ({})", p.name, p.base_url);
                 if check_provider_health(client, p).await {
                     return p.clone();
                 } else {
-                    println!("⚠️  [Auto-Routing] Active provider '{}' ({}) is offline. Failover activated...", p.name, p.base_url);
+                    tracing::warn!("Active provider '{}' is offline. Failover activated...", p.name);
                 }
             }
         }
@@ -91,7 +92,7 @@ impl AppConfig {
             if self.active_provider != "auto" && p.name == self.active_provider {
                 continue;
             }
-            println!("📡 Probing candidate provider: '{}' ({})", p.name, p.base_url);
+            tracing::info!("Probing candidate '{}' ({})", p.name, p.base_url);
             if check_provider_health(client, p).await {
                 candidates.push(p.clone());
             }
@@ -127,7 +128,7 @@ impl AppConfig {
         });
 
         let chosen = candidates[0].clone();
-        println!("🤖 [Auto-Routing] Routed requests to: '{}' ({})", chosen.name, chosen.base_url);
+        tracing::info!("Routed requests to '{}' ({})", chosen.name, chosen.base_url);
         chosen
     }
 
