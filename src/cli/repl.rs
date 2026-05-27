@@ -485,7 +485,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         for line in wrapped_user {
             let expanded_line = line.replace('\t', "    ");
             let padded = format!("  {:width$}  ", expanded_line, width = content_width);
-            println!("  {} {} {}", user_pipe, padded, user_pipe);
+            println!("  {}{}{}", user_pipe, padded, user_pipe);
         }
         println!("  {}", user_border(&format!("╰{}╯", "─".repeat(content_width + 4))));
 
