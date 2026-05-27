@@ -119,8 +119,12 @@ impl Tool for ReadFileTool {
         let end_raw = args["end_line"].as_u64();
 
         let lines: Vec<&str> = content.lines().collect();
-        let end = end_raw.map(|e| (e as usize).min(lines.len())).unwrap_or(lines.len());
-        let slice = lines[start.min(lines.len())..end].join("\n");
+        let start = start.min(lines.len());
+        let end = end_raw
+            .map(|e| (e as usize).min(lines.len()))
+            .unwrap_or(lines.len())
+            .max(start);
+        let slice = lines[start..end].join("\n");
 
         Ok(truncate(slice, "FILE"))
     }
@@ -285,4 +289,58 @@ fn strip_html_tags(html: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::sandbox::{SharedSandbox, SandboxMode};
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_read_file_tool_range_handling() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        let path_str = file_path.to_str().unwrap();
+
+        // Write a test file with 10 lines
+        let file_content = (1..=10)
+            .map(|i| format!("Line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        tokio::fs::write(&file_path, file_content).await.unwrap();
+
+        let sandbox = SharedSandbox::new(SandboxMode::Local);
+        let tool = ReadFileTool::new(sandbox);
+
+        // 1. Test normal range (lines 2 to 5)
+        let res = tool.call(json!({
+            "path": path_str,
+            "start_line": 2,
+            "end_line": 5
+        })).await.unwrap();
+        assert_eq!(res, "Line 2\nLine 3\nLine 4\nLine 5");
+
+        // 2. Test inverted range (start > end) - should not panic and return empty
+        let res = tool.call(json!({
+            "path": path_str,
+            "start_line": 8,
+            "end_line": 4
+        })).await.unwrap();
+        assert_eq!(res, "");
+
+        // 3. Test out of bounds start
+        let res = tool.call(json!({
+            "path": path_str,
+            "start_line": 50,
+            "end_line": 60
+        })).await.unwrap();
+        assert_eq!(res, "");
+
+        // 4. Test normal defaults (no start_line/end_line)
+        let res = tool.call(json!({
+            "path": path_str
+        })).await.unwrap();
+        assert_eq!(res, (1..=10).map(|i| format!("Line {}", i)).collect::<Vec<_>>().join("\n"));
+    }
 }
