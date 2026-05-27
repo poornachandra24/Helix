@@ -483,7 +483,8 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         println!("{}", user_border(&format!(" {}╮", "─".repeat(dashes_count))));
         let wrapped_user = wrap_text(trimmed, content_width);
         for line in wrapped_user {
-            let padded = format!(" {:width$} ", line, width = content_width);
+            let expanded_line = line.replace('\t', "    ");
+            let padded = format!("  {:width$}  ", expanded_line, width = content_width);
             println!("  {} {} {}", user_pipe, padded, user_pipe);
         }
         println!("  {}", user_border(&format!("╰{}╯", "─".repeat(content_width + 4))));
@@ -569,10 +570,11 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                 let rendered = fmt_text.to_string();
 
                 for line in rendered.lines() {
-                    let clean_line = console::strip_ansi_codes(line);
+                    let expanded_line = line.replace('\t', "    ");
+                    let clean_line = console::strip_ansi_codes(&expanded_line);
                     let width = clean_line.width();
                     let pad = content_width.saturating_sub(width);
-                    println!("  {}  {}{}{}", pipe, line, " ".repeat(pad), border_color_fn("│"));
+                    println!("  {}  {}{}  {}", pipe, expanded_line, " ".repeat(pad), pipe);
                 }
 
                 // Close the box with a timer

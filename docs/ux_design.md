@@ -30,18 +30,18 @@ Given `content_width = W`:
 | Element | Width formula |
 |---------|--------------|
 | Top border dashes | `W - title.len()` |
-| Content row padding | `format!(" {:W$} ", line)` → `W + 2` chars |
+| Content row padding | `format!("  {:W$}  ", line)` → `W + 4` chars |
 | Bottom border dashes | `W + 4` |
 | Outer box total | `W + 8` |
 
 ### Rounded corners
 
-All boxes use Unicode rounded box-drawing corners to avoid the hard "computer terminal" feel of square corners:
+All boxes use Unicode rounded box-drawing corners to avoid the hard "computer terminal" feel of square corners. Indentation is exactly 2 spaces:
 
 ```
-╭── Label ────────────────────────╮
-│  content here                   │
-╰────────── [Elapsed: X.XXs] ─────╯
+  ╭── Label ────────────────────────╮
+  │  content here                   │
+  ╰────────── [Elapsed: X.XXs] ─────╯
 ```
 
 ### Avoiding ANSI color bleed on headers
