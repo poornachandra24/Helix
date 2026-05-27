@@ -36,9 +36,9 @@ pub enum GateResult {
 impl GateResult {
     pub fn icon(&self) -> &'static str {
         match self {
-            GateResult::Pass       => "✅",
-            GateResult::Fail(_)   => "❌",
-            GateResult::Skipped   => "⏭️ ",
+            GateResult::Pass       => "✔",
+            GateResult::Fail(_)   => "✘",
+            GateResult::Skipped   => "⤳",
         }
     }
     pub fn is_pass(&self) -> bool { *self == GateResult::Pass }
@@ -67,10 +67,10 @@ impl GateReport {
         }
 
         if self.all_pass() {
-            println!("\n{}", style("All gates passed ✅").green().bold());
+            println!("\n{}", style("All gates passed ✔").green().bold());
             println!("Gate hash: {}", style(&self.gate_hash).dim());
         } else {
-            println!("\n{}", style("One or more gates failed — diff rejected ❌").red().bold());
+            println!("\n{}", style("One or more gates failed — diff rejected ✘").red().bold());
         }
         println!("{}", style("────────────────────────────────────────────────").bold());
     }
