@@ -261,9 +261,20 @@ async fn query_openrouter_catalogue(model: &str, client: &Client) -> Option<usiz
 /// shows what was detected.
 pub async fn resolve_and_report(config: &AppConfig, client: &Client) -> usize {
     let window = resolve_context_window(config, client).await;
+    let mut formatted_window = String::new();
+    let n_str = window.to_string();
+    for (i, c) in n_str.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            formatted_window.push(',');
+        }
+        formatted_window.push(c);
+    }
+    let formatted_window: String = formatted_window.chars().rev().collect();
+
     println!(
-        "📐 Context window: {} tokens (model: {})",
-        console::style(format!("{:>9}", window)).cyan().bold(),
+        "  {}  {} tokens (model: {})",
+        console::style("Context Limit :").dim(),
+        console::style(formatted_window).cyan().bold(),
         console::style(&config.active_model).dim()
     );
     window

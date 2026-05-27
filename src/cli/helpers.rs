@@ -1,5 +1,4 @@
 use anyhow::Result;
-use console::Style;
 use crate::tools::builtins;
 use crate::config;
 use crate::core::context;
@@ -10,7 +9,17 @@ use crate::tools::sandbox;
 use crate::memory::skills;
 use crate::tools;
 
-pub fn print_banner(config: &config::AppConfig) {
+pub fn print_banner(
+    config: &config::AppConfig,
+    session_id: &str,
+    memory_size: usize,
+    patterns_count: usize,
+) {
+    use comfy_table::{Table, Cell, CellAlignment, ColumnConstraint, Width, Color, Attribute};
+    use comfy_table::presets::UTF8_BORDERS_ONLY;
+    use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+    use owo_colors::OwoColorize;
+
     let logo_lines = [
         "    __  __   ______   __       ____  __  __",
         "   / / / /  / ____/  / /      /  _/  \\ \\/ /",
@@ -19,24 +28,11 @@ pub fn print_banner(config: &config::AppConfig) {
         "/_/ /_/  /_____/  /_____/  /___/     /_/\\_\\",
     ];
 
-    let colors = [
-        Style::new().color256(81),  // Soft Cyan
-        Style::new().color256(75),  // Sky Blue
-        Style::new().color256(111), // Pastel Blue
-        Style::new().color256(147), // Soft Lavender
-        Style::new().color256(183), // Soft Violet/Pink
-    ];
-
     println!();
-    for (i, line) in logo_lines.iter().enumerate() {
-        println!("{}", colors[i].apply_to(line));
+    for line in logo_lines {
+        println!("{}", line.cyan().bold());
     }
     println!();
-
-    let border_color = Style::new().color256(240); // Subtle dark grey border
-    let label_style = Style::new().color256(248).bold(); // Light grey labels
-    let val_style = Style::new().color256(253); // Bright white values
-    let active_indicator = Style::new().color256(46); // Matrix Green
 
     let provider = &config.active_provider;
     let model = &config.active_model;
@@ -44,70 +40,79 @@ pub fn print_banner(config: &config::AppConfig) {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "Unknown".to_string());
 
-    let ws_display = if ws.len() > 38 {
-        format!("...{}", &ws[ws.len() - 35..])
-    } else {
-        ws.clone()
-    };
+    let mut table = Table::new();
+    table.load_preset(UTF8_BORDERS_ONLY);
+    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_width(58);
+    table.set_constraints(vec![
+        ColumnConstraint::Absolute(Width::Fixed(15)),
+        ColumnConstraint::Absolute(Width::Fixed(39)),
+    ]);
 
-    // Helper to print a key-value row with perfect padding alignment
-    let print_labeled_row = |label: &str, val: &str| {
-        let left = format!("{:<12}: {}", label, val);
-        let left_len = left.chars().count();
-        let middle_spaces = 52_usize.saturating_sub(left_len);
-        let spaces = " ".repeat(middle_spaces);
-        println!(
-            "{}  {:<12}: {}{}  {}",
-            border_color.apply_to("│"),
-            label_style.apply_to(label),
-            val_style.apply_to(val),
-            spaces,
-            border_color.apply_to("│")
-        );
-    };
+    // Row 1: Header
+    table.add_row(vec![
+        Cell::new("● HELIX CORE ENGINE").fg(Color::Cyan).add_attribute(Attribute::Bold),
+        Cell::new("STATUS: ONLINE")
+            .fg(Color::Green)
+            .add_attribute(Attribute::Bold)
+            .set_alignment(CellAlignment::Right),
+    ]);
 
-    println!("{}", border_color.apply_to("┌────────────────────────────────────────────────────────┐"));
-    
-    // Header row: Status online
-    let header_left = "● HELIX CORE ENGINE v0.1.0";
-    let header_right = "STATUS: ONLINE";
-    let left_len = header_left.chars().count();
-    let right_len = header_right.chars().count();
-    let middle_spaces = 52_usize.saturating_sub(left_len).saturating_sub(right_len);
-    let spaces = " ".repeat(middle_spaces);
-    println!(
-        "{}  {} {}{}{}  {}",
-        border_color.apply_to("│"),
-        active_indicator.apply_to("●"),
-        label_style.apply_to("HELIX CORE ENGINE v0.1.0"),
-        spaces,
-        active_indicator.apply_to("STATUS: ONLINE"),
-        border_color.apply_to("│")
-    );
+    // Row 2: Separator
+    table.add_row(vec![
+        Cell::new("───────────────").fg(Color::DarkGrey),
+        Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
+    ]);
 
-    println!("{}", border_color.apply_to("├────────────────────────────────────────────────────────┤"));
-    print_labeled_row("PROVIDER", provider);
-    print_labeled_row("MODEL", model);
-    print_labeled_row("WORKSPACE", &ws_display);
-    println!("{}", border_color.apply_to("├────────────────────────────────────────────────────────┤"));
-    
-    // Help row
-    let help_left = "💡 Type /help to list system commands.";
-    let help_left_len = help_left.chars().count();
-    let middle_spaces = 52_usize.saturating_sub(help_left_len);
-    let spaces = " ".repeat(middle_spaces);
-    println!(
-        "{}  {} {}{}{}{}  {}",
-        border_color.apply_to("│"),
-        Style::new().color256(220).apply_to("💡"),
-        label_style.apply_to("Type "),
-        Style::new().color256(51).apply_to("/help"),
-        label_style.apply_to(" to list system commands."),
-        spaces,
-        border_color.apply_to("│")
-    );
-    
-    println!("{}", border_color.apply_to("└────────────────────────────────────────────────────────┘"));
+    // Row 3, 4, 5: Provider, Model, Workspace
+    table.add_row(vec![
+        Cell::new("PROVIDER").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(provider).fg(Color::White),
+    ]);
+    table.add_row(vec![
+        Cell::new("MODEL").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(model).fg(Color::White),
+    ]);
+    table.add_row(vec![
+        Cell::new("WORKSPACE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&ws).fg(Color::White),
+    ]);
+
+    // Row 6: Separator
+    table.add_row(vec![
+        Cell::new("───────────────").fg(Color::DarkGrey),
+        Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
+    ]);
+
+    // Row 7, 8, 9: Session ID, Memory Size, Sona State
+    table.add_row(vec![
+        Cell::new("SESSION ID").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(session_id).fg(Color::White),
+    ]);
+    let mem_str = format!("{} documents", memory_size);
+    table.add_row(vec![
+        Cell::new("MEMORY SIZE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&mem_str).fg(Color::White),
+    ]);
+    let sona_str = format!("{} patterns learned", patterns_count);
+    table.add_row(vec![
+        Cell::new("SONA STATE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&sona_str).fg(Color::White),
+    ]);
+
+    // Row 10: Separator
+    table.add_row(vec![
+        Cell::new("───────────────").fg(Color::DarkGrey),
+        Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
+    ]);
+
+    // Row 11: Help
+    table.add_row(vec![
+        Cell::new("💡").set_alignment(CellAlignment::Center),
+        Cell::new("Type /help to list system commands.").fg(Color::Cyan),
+    ]);
+
+    println!("{table}");
 }
 
 pub fn build_system_prompt(base: &str, skill_reg: &skills::SkillRegistry) -> String {
@@ -198,4 +203,169 @@ pub fn count_omitted_turns(messages: &[serde_json::Value]) -> usize {
         }
     }
     total
+}
+
+pub fn load_sona_state(data_dir: &std::path::Path, sona: &ruvector_sona::SonaEngine) {
+    let state_path = data_dir.join("sona_state.json");
+    if state_path.exists() {
+        if let Ok(json) = std::fs::read_to_string(&state_path) {
+            let _ = sona.coordinator().load_state(&json);
+        }
+    }
+    let weights_path = data_dir.join("sona_weights.json");
+    if weights_path.exists() {
+        if let Ok(json) = std::fs::read_to_string(&weights_path) {
+            if let Ok((down, up)) = serde_json::from_str::<(Vec<f32>, Vec<f32>)>(&json) {
+                let _ = sona.coordinator().restore_micro_lora_weights(down, up);
+            }
+        }
+    }
+}
+
+pub fn save_sona_state(data_dir: &std::path::Path, sona: &ruvector_sona::SonaEngine) {
+    let state_path = data_dir.join("sona_state.json");
+    let json_state = sona.coordinator().serialize_state();
+    let _ = std::fs::write(state_path, json_state);
+
+    let weights_path = data_dir.join("sona_weights.json");
+    let weights = sona.coordinator().get_micro_lora_weights();
+    if let Ok(json_weights) = serde_json::to_string(&weights) {
+        let _ = std::fs::write(weights_path, json_weights);
+    }
+}
+
+pub fn print_status_card(
+    session_id: &str,
+    model_name: &str,
+    memory_size: usize,
+    sona: Option<&ruvector_sona::SonaEngine>,
+    has_pending_evolution: bool,
+    full_diagnostics: bool,
+) {
+    use comfy_table::{Table, Cell, ColumnConstraint, Width, Color, Attribute};
+    use comfy_table::presets::UTF8_BORDERS_ONLY;
+    use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_BORDERS_ONLY);
+    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_width(62);
+    table.set_constraints(vec![
+        ColumnConstraint::Absolute(Width::Fixed(18)),
+        ColumnConstraint::Absolute(Width::Fixed(40)),
+    ]);
+
+    // Row 1: Header
+    table.add_row(vec![
+        Cell::new("HELIX SYSTEM INTEGRATION STATUS").fg(Color::Cyan).add_attribute(Attribute::Bold),
+        Cell::new(""),
+    ]);
+
+    // Row 2: Separator
+    table.add_row(vec![
+        Cell::new("──────────────────").fg(Color::DarkGrey),
+        Cell::new("────────────────────────────────────────").fg(Color::DarkGrey),
+    ]);
+
+    // Row 3-6: Basic fields
+    table.add_row(vec![
+        Cell::new("Session ID").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(session_id).fg(Color::White),
+    ]);
+    table.add_row(vec![
+        Cell::new("Active Model").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(model_name).fg(Color::White),
+    ]);
+    let mem_str = format!("{} documents", memory_size);
+    table.add_row(vec![
+        Cell::new("Memory Size").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&mem_str).fg(Color::White),
+    ]);
+    let patterns_count = sona.as_ref().map(|s| s.stats().patterns_stored).unwrap_or(0);
+    let sona_str = format!("{} patterns learned", patterns_count);
+    table.add_row(vec![
+        Cell::new("SONA State").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&sona_str).fg(Color::White),
+    ]);
+
+    if full_diagnostics {
+        // Row 7: Separator
+        table.add_row(vec![
+            Cell::new("──────────────────").fg(Color::DarkGrey),
+            Cell::new("────────────────────────────────────────").fg(Color::DarkGrey),
+        ]);
+
+        // Row 8: Section Header
+        table.add_row(vec![
+            Cell::new("EVOLUTION & NEURAL ARCHITECTURE DIAGNOSTICS").fg(Color::Cyan).add_attribute(Attribute::Bold),
+            Cell::new(""),
+        ]);
+
+        // Row 9: Separator
+        table.add_row(vec![
+            Cell::new("──────────────────").fg(Color::DarkGrey),
+            Cell::new("────────────────────────────────────────").fg(Color::DarkGrey),
+        ]);
+
+        let ewc_tasks = sona.as_ref().map(|s| s.stats().ewc_tasks).unwrap_or(0);
+        let buf_rate = sona.as_ref().map(|s| s.stats().buffer_success_rate * 100.0).unwrap_or(0.0);
+        let consolidation = format!("{} tasks, {:.1}% buffer success", ewc_tasks, buf_rate);
+        table.add_row(vec![
+            Cell::new("Consolidation").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new(&consolidation).fg(Color::White),
+        ]);
+
+        let lambda = sona.as_ref().map(|s| s.config().ewc_lambda).unwrap_or(0.0);
+        let lambda_str = format!("{:.1}", lambda);
+        table.add_row(vec![
+            Cell::new("EWC Lambda").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new(&lambda_str).fg(Color::White),
+        ]);
+
+        let micro_rank = sona.as_ref().map(|s| s.config().micro_lora_rank).unwrap_or(0);
+        let micro_dim = sona.as_ref().map(|s| s.config().hidden_dim).unwrap_or(0);
+        let micro_params = micro_dim * micro_rank * 2;
+        let micro_status = format!("Rank {}, {} active params", micro_rank, micro_params);
+        table.add_row(vec![
+            Cell::new("Micro-LoRA").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new(&micro_status).fg(Color::White),
+        ]);
+
+        let evol_plain = if has_pending_evolution {
+            "1 pending patch (use /approve to apply)".to_string()
+        } else {
+            "0 pending changes (system stable)".to_string()
+        };
+        let mut evol_cell = Cell::new(&evol_plain);
+        if has_pending_evolution {
+            evol_cell = evol_cell.fg(Color::Yellow).add_attribute(Attribute::Bold);
+        } else {
+            evol_cell = evol_cell.fg(Color::White);
+        }
+        table.add_row(vec![
+            Cell::new("Evolutions").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            evol_cell,
+        ]);
+    }
+
+    println!("{table}");
+}
+
+pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    let options = textwrap::Options::new(max_width)
+        .break_words(true)
+        .word_separator(textwrap::WordSeparator::AsciiSpace);
+    text.lines()
+        .flat_map(|line| {
+            if line.is_empty() {
+                // Preserve blank lines as empty entries
+                vec![String::new()]
+            } else {
+                textwrap::wrap(line, &options)
+                    .into_iter()
+                    .map(|s| s.into_owned())
+                    .collect()
+            }
+        })
+        .collect()
 }

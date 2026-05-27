@@ -9,6 +9,11 @@ async-trait = "0.1"
 chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
 console = "0.16.3"
+textwrap = { version = "0.16", default-features = false }
+unicode-width = "0.1"
+comfy-table = { version = "7.1.1", default-features = false, features = ["custom_styling"] }
+owo-colors = "4.3.0"
+termimad = "0.34"
 dialoguer = "0.12.0"
 directories = "6.0.0"
 futures-util = "0.3"
@@ -25,6 +30,8 @@ fastembed = "5"
 turbovec = "0.6.0"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 rmcp = { version = "1.7.0", features = ["client", "transport-child-process"] }
+ruvllm = "2.2.1"
+ruvector-sona = { version = "0.2.0", features = ["serde-support"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 blas-src = { version = "0.10", features = ["openblas"] }

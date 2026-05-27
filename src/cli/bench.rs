@@ -307,7 +307,7 @@ impl BenchmarkRunner {
 
         let json = serde_json::to_string_pretty(&baseline)?;
         std::fs::write(&self.baseline_path, json)?;
-        println!("{}", style(format!("✅ Baseline saved to {}", self.baseline_path.display())).green());
+        println!("{}", style(format!("✔ Baseline saved to {}", self.baseline_path.display())).green());
         Ok(())
     }
 
@@ -334,11 +334,11 @@ pub struct RegressionReport {
 impl RegressionReport {
     pub fn print(&self) {
         if !self.is_regression {
-            println!("{}", style("✅ No regressions detected").green().bold());
+            println!("{}", style("✔ No regressions detected").green().bold());
         } else {
-            println!("{}", style("🔴 REGRESSION DETECTED:").red().bold());
+            println!("{}", style("✘ REGRESSION DETECTED:").red().bold());
             for r in &self.regressions {
-                println!("  ❌ {}", style(r).red());
+                println!("  ✘ {}", style(r).red());
             }
         }
     }
