@@ -426,15 +426,16 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         }
 
         // ── Benchmarks & Evolution ─────────────────────────────
-        if trimmed == "/benchmark" {
-            let _ = run_benchmark(&app_config, false).await;
+        if trimmed == "/benchmark" || trimmed == "/benchmark --local" {
+            let local = trimmed.contains("--local");
+            let _ = run_benchmark(&app_config, false, local).await;
             continue;
         }
         if trimmed == "/baseline" || trimmed == "/save-baseline" {
             if trimmed == "/baseline" {
                 println!("{}", style("💡 Hint: /baseline is deprecated. Use `/save-baseline` instead.").yellow());
             }
-            let _ = run_benchmark(&app_config, true).await;
+            let _ = run_benchmark(&app_config, true, false).await;
             continue;
         }
         if trimmed.starts_with("/evolve") {

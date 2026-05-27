@@ -403,7 +403,127 @@ fn read_tools_from_session(path: &Path) -> Vec<String> {
     tools
 }
 
-pub async fn run_benchmark(config: &crate::config::AppConfig, update_baseline: bool) -> Result<()> {
+fn generate_deterministic_vector(seed: f32) -> Vec<f32> {
+    let mut vec = vec![0.0f32; 384];
+    for (i, val) in vec.iter_mut().enumerate() {
+        *val = ((i as f32 * seed).sin() * 1000.0).fract();
+    }
+    vec
+}
+
+pub fn run_local_microbench() -> Result<()> {
+    println!("\n{}", style("📊 RUNNING LOCAL COMPUTE MICROBENCHMARKS").bold().cyan());
+    println!("{}", style("───────────────────────────────────────────────────").dim());
+
+    // 1. Benchmark turbovec search
+    print!("  ⦿ turbovec (SIMD 384-dim search over 1k vectors)... ");
+    let mut index = turbovec::IdMapIndex::new(384, 4)
+        .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+    let mut ids = Vec::new();
+    for i in 0..1000 {
+        let vector = generate_deterministic_vector(i as f32 + 1.0);
+        let id = i as u64;
+        index.add_with_ids(&vector, &[id]).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        ids.push(id);
+    }
+    let query = generate_deterministic_vector(999.0);
+    
+    let t0 = Instant::now();
+    let iterations = 1000;
+    for _ in 0..iterations {
+        let _ = index.search(&query, 5);
+    }
+    let d_all = t0.elapsed().as_nanos() as f64 / iterations as f64 / 1000.0;
+
+    let allowlist: Vec<u64> = ids.iter().copied().take(100).collect();
+    let t1 = Instant::now();
+    for _ in 0..iterations {
+        let _ = index.search_with_allowlist(&query, 5, Some(&allowlist));
+    }
+    let d_allow = t1.elapsed().as_nanos() as f64 / iterations as f64 / 1000.0;
+    println!("done.");
+
+    // 2. Benchmark SONA Micro-LoRA
+    print!("  ⦿ SONA Neural Adaptation (Micro-LoRA & trajectory)... ");
+    let sona_config = ruvector_sona::SonaConfig {
+        hidden_dim: 384,
+        embedding_dim: 384,
+        ..Default::default()
+    };
+    let sona_engine = ruvector_sona::SonaEngine::with_config(sona_config);
+    
+    let sona_iterations = 10000;
+    let mut optimized = vec![0.0f32; 384];
+    let t2 = Instant::now();
+    for _ in 0..sona_iterations {
+        sona_engine.apply_micro_lora(&query, &mut optimized);
+    }
+    let d_lora = t2.elapsed().as_nanos() as f64 / sona_iterations as f64 / 1000.0;
+
+    let t3 = Instant::now();
+    for _ in 0..iterations {
+        let mut trajectory = sona_engine.begin_trajectory(query.clone());
+        trajectory.add_step(vec![0.0f32; 384], vec![], 0.85);
+        trajectory.set_model_route("gpt-oss");
+        sona_engine.end_trajectory(trajectory, 0.85);
+        let _ = sona_engine.tick();
+    }
+    let d_traj = t3.elapsed().as_nanos() as f64 / iterations as f64 / 1000.0;
+    println!("done.");
+
+    // 3. Benchmark SQLite metadata
+    print!("  ⦿ SQLite Metadata Query (1k records)... ");
+    let db = rusqlite::Connection::open_in_memory()?;
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS memory_metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            file_path TEXT,
+            workspace_path TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+        [],
+    )?;
+    for i in 0..1000 {
+        db.execute(
+            "INSERT INTO memory_metadata (text, file_path, workspace_path) VALUES (?, ?, ?)",
+            rusqlite::params![
+                format!("Mock text block {}", i),
+                format!("file_{}.rs", i),
+                "/workspace"
+            ]
+        )?;
+    }
+    let t4 = Instant::now();
+    for _ in 0..iterations {
+        let mut stmt = db.prepare(
+            "SELECT id FROM memory_metadata WHERE workspace_path = ?"
+        )?;
+        let ids: Vec<u64> = stmt
+            .query_map(["/workspace"], |row| row.get(0))?
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(ids.len(), 1000);
+    }
+    let d_sql = t4.elapsed().as_nanos() as f64 / iterations as f64 / 1000.0;
+    println!("done.");
+
+    // Print beautiful output
+    println!("\n{}", style("═════════ Microbenchmarks Results ═════════").bold().cyan());
+    println!("  turbovec search (all):         {:>8.2} µs", d_all);
+    println!("  turbovec search (allowlist):   {:>8.2} µs", d_allow);
+    println!("  SONA apply_micro_lora:         {:>8.2} µs", d_lora);
+    println!("  SONA trajectory update:        {:>8.2} µs", d_traj);
+    println!("  SQLite metadata query:         {:>8.2} µs", d_sql);
+    println!("{}", style("═══════════════════════════════════════════").bold().cyan());
+
+    Ok(())
+}
+
+pub async fn run_benchmark(config: &crate::config::AppConfig, update_baseline: bool, local: bool) -> Result<()> {
+    if local {
+        return run_local_microbench();
+    }
     let project_root = std::env::current_dir()?;
     let suite_dir = project_root.join("benchmarks").join("suite");
     let baseline_path = project_root.join("benchmarks").join("baseline.json");

@@ -31,6 +31,10 @@ enum Command {
         /// Save results as the new baseline
         #[arg(long)]
         update_baseline: bool,
+
+        /// Run the offline CPU/memory execution microbenchmarks
+        #[arg(long)]
+        local: bool,
     },
 }
 
@@ -61,8 +65,8 @@ async fn main() -> Result<()> {
             cli::run::run_single(&app_config, goal).await?;
         }
 
-        Some(Command::Benchmark { update_baseline }) => {
-            cli::bench::run_benchmark(&app_config, *update_baseline).await?;
+        Some(Command::Benchmark { update_baseline, local }) => {
+            cli::bench::run_benchmark(&app_config, *update_baseline, *local).await?;
         }
 
         Some(Command::Chat) | None => {
