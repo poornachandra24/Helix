@@ -98,13 +98,11 @@ impl OpenAiCompatibleAdapter {
                     let mut modified = m.clone();
                     if let Some(tool_calls) = modified.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
                         for tc in tool_calls {
-                            if let Some(func) = tc.get_mut("function") {
-                                if let Some(args) = func.get("arguments") {
-                                    if args.is_object() {
+                            if let Some(func) = tc.get_mut("function")
+                                && let Some(args) = func.get("arguments")
+                                    && args.is_object() {
                                         func["arguments"] = json!(args.to_string());
                                     }
-                                }
-                            }
                         }
                     }
                     msgs.push(modified);
@@ -133,13 +131,11 @@ impl OpenAiCompatibleAdapter {
                     let mut modified = m.clone();
                     if let Some(tool_calls) = modified.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
                         for tc in tool_calls {
-                            if let Some(func) = tc.get_mut("function") {
-                                if let Some(args_str) = func.get("arguments").and_then(|v| v.as_str()) {
-                                    if let Ok(obj) = serde_json::from_str::<Value>(args_str) {
+                            if let Some(func) = tc.get_mut("function")
+                                && let Some(args_str) = func.get("arguments").and_then(|v| v.as_str())
+                                    && let Ok(obj) = serde_json::from_str::<Value>(args_str) {
                                         func["arguments"] = obj;
                                     }
-                                }
-                            }
                         }
                     }
                     msgs.push(modified);
@@ -181,8 +177,8 @@ impl OpenAiCompatibleAdapter {
         };
 
         // ── Tool calls ────────────────────────────────────────────
-        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
-            if !tool_calls.is_empty() {
+        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array())
+            && !tool_calls.is_empty() {
                 let mut calls = Vec::new();
                 for tc in tool_calls {
                     let func = &tc["function"];
@@ -211,7 +207,6 @@ impl OpenAiCompatibleAdapter {
                     return Ok(ModelResponse::ToolCalls(calls));
                 }
             }
-        }
 
         // ── Text content ──────────────────────────────────────────
         let text = message["content"].as_str().unwrap_or("").to_string();

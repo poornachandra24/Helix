@@ -1,11 +1,11 @@
-/// Dynamic context window resolver.
-///
-/// Resolution order (first success wins):
-///   1. `config.context_window_override` — user-set manual override
-///   2. Ollama native `/api/show` — for local/cloud Ollama providers
-///   3. Provider's own `/v1/models/{id}` — works for OpenAI and compatible providers
-///   4. OpenRouter public model catalogue — covers 1 000+ models, no auth needed
-///   5. Conservative fallback → 8 192
+//! Dynamic context window resolver.
+//!
+//! Resolution order (first success wins):
+//!   1. `config.context_window_override` — user-set manual override
+//!   2. Ollama native `/api/show` — for local/cloud Ollama providers
+//!   3. Provider's own `/v1/models/{id}` — works for OpenAI and compatible providers
+//!   4. OpenRouter public model catalogue — covers 1 000+ models, no auth needed
+//!   5. Conservative fallback → 8 192
 
 use reqwest::Client;
 use serde_json::Value;
@@ -31,8 +31,8 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
     let model = &config.active_model;
 
     // Strategy 1 — Ollama native /api/show (passes auth for cloud models)
-    if provider.api_format == ApiFormat::OllamaNative {
-        if let Some(w) = query_ollama_show(
+    if provider.api_format == ApiFormat::OllamaNative
+        && let Some(w) = query_ollama_show(
             &provider.base_url,
             model,
             provider.api_key.as_deref(), // ← auth required for Ollama Cloud
@@ -41,15 +41,13 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
             tracing::info!(context_window = w, source = "ollama /api/show", "Context window resolved");
             return w;
         }
-    }
 
     // Strategy 2 — Provider's own /v1/models/{id} (OpenAI and compatible)
-    if provider.api_format == ApiFormat::OpenAiCompatible {
-        if let Some(w) = query_openai_models(&provider.base_url, model, provider.api_key.as_deref(), client).await {
+    if provider.api_format == ApiFormat::OpenAiCompatible
+        && let Some(w) = query_openai_models(&provider.base_url, model, provider.api_key.as_deref(), client).await {
             tracing::info!(context_window = w, source = "provider /v1/models", "Context window resolved");
             return w;
         }
-    }
 
     // Strategy 3 — OpenRouter public catalogue (free, no auth, covers 1000+ models)
     if let Some(w) = query_openrouter_catalogue(model, client).await {
@@ -104,11 +102,10 @@ async fn query_ollama_show(
     // modelinfo keys: "llama.context_length", "gemma.context_length", etc.
     if let Some(info) = json.get("modelinfo").and_then(|v| v.as_object()) {
         for (key, val) in info {
-            if key.ends_with(".context_length") || key == "context_length" {
-                if let Some(n) = val.as_u64() {
+            if (key.ends_with(".context_length") || key == "context_length")
+                && let Some(n) = val.as_u64() {
                     return Some(n as usize);
                 }
-            }
         }
     }
 
@@ -116,11 +113,10 @@ async fn query_ollama_show(
     if let Some(params) = json.get("parameters").and_then(|v| v.as_str()) {
         for line in params.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 2 && parts[0] == "num_ctx" {
-                if let Ok(n) = parts[1].parse::<usize>() {
+            if parts.len() == 2 && parts[0] == "num_ctx"
+                && let Ok(n) = parts[1].parse::<usize>() {
                     return Some(n);
                 }
-            }
         }
     }
 
@@ -218,30 +214,28 @@ async fn query_openrouter_catalogue(model: &str, client: &Client) -> Option<usiz
     for entry in models.iter() {
         let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let id_lower = id.to_lowercase();
-        if candidates.iter().any(|c| id_lower == *c) {
-            if let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
+        if candidates.iter().any(|c| id_lower == *c)
+            && let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
                 tracing::debug!(id = %id, context_length = n, "OpenRouter exact match");
                 return Some(n as usize);
             }
-        }
     }
 
     // Pass 2: partial match — any candidate is a substring of the OpenRouter ID
     let mut best: Option<(usize, usize)> = None;
     for entry in models.iter() {
         let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-        let id_tail = id.split('/').last().unwrap_or("");
+        let id_tail = id.split('/').next_back().unwrap_or("");
         let matched = candidates.iter().any(|c| {
             !c.is_empty() && (id.contains(*c) || c.contains(id_tail))
         });
-        if matched {
-            if let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
+        if matched
+            && let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
                 let score = id.len();
                 if best.map(|(_, s)| score > s).unwrap_or(true) {
                     best = Some((n as usize, score));
                 }
             }
-        }
     }
 
     if let Some((ctx, _)) = best {

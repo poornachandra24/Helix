@@ -388,17 +388,15 @@ fn read_tools_from_session(path: &Path) -> Vec<String> {
     let mut tools = Vec::new();
     for line in content.lines() {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if event["event"].as_str() == Some("tool_calls") {
-            if let Some(arr) = event["tools"].as_array() {
+        if event["event"].as_str() == Some("tool_calls")
+            && let Some(arr) = event["tools"].as_array() {
                 for t in arr {
-                    if let Some(name) = t.as_str() {
-                        if !tools.contains(&name.to_string()) {
+                    if let Some(name) = t.as_str()
+                        && !tools.contains(&name.to_string()) {
                             tools.push(name.to_string());
                         }
-                    }
                 }
             }
-        }
     }
     tools
 }
@@ -412,7 +410,12 @@ fn generate_deterministic_vector(seed: f32) -> Vec<f32> {
 }
 
 pub fn run_local_microbench() -> Result<()> {
-    println!("\n{}", style("📊 RUNNING LOCAL COMPUTE MICROBENCHMARKS").bold().cyan());
+    if cfg!(debug_assertions) {
+        println!("{}", style("⚠️  WARNING: Running in unoptimized DEBUG mode. Latency measurements will be highly skewed.").yellow().bold());
+        println!("{}", style("   For accurate performance benchmarks, run with release optimizations: cargo run --release\n").yellow());
+    }
+
+    println!("{}", style("📊 RUNNING LOCAL COMPUTE MICROBENCHMARKS").bold().cyan());
     println!("{}", style("───────────────────────────────────────────────────").dim());
 
     // 1. Benchmark turbovec search
@@ -523,6 +526,10 @@ pub fn run_local_microbench() -> Result<()> {
 pub async fn run_benchmark(config: &crate::config::AppConfig, update_baseline: bool, local: bool) -> Result<()> {
     if local {
         return run_local_microbench();
+    }
+    if cfg!(debug_assertions) {
+        println!("{}", style("⚠️  WARNING: Running in unoptimized DEBUG mode. Network and execution timings will be highly skewed.").yellow().bold());
+        println!("{}", style("   For accurate performance benchmarks, run with release optimizations: cargo run --release\n").yellow());
     }
     let project_root = std::env::current_dir()?;
     let suite_dir = project_root.join("benchmarks").join("suite");

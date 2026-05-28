@@ -78,6 +78,12 @@ pub struct DockerSandbox {
     container_workspace: String,
 }
 
+impl Default for DockerSandbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DockerSandbox {
     pub fn new() -> Self {
         Self {

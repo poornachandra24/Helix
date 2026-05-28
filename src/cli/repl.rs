@@ -244,15 +244,14 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             }
             "/clear_memory" | "/clear_memories" => {
                 println!("{}", style("💡 Hint: /clear_memory is deprecated. Use `/memory --clear` instead.").yellow());
-                if let Some(ref mut memory_engine) = engine.memory {
-                    if let Ok(workspace_dir) = std::env::current_dir() {
+                if let Some(ref mut memory_engine) = engine.memory
+                    && let Ok(workspace_dir) = std::env::current_dir() {
                         let workspace_str = workspace_dir.to_string_lossy().to_string();
                         match memory_engine.clear_workspace(&workspace_str) {
                             Ok(()) => println!("{}", style("✔ Workspace memory cleared successfully.").green()),
                             Err(e) => println!("✘ Error: {}", e),
                         }
                     }
-                }
                 continue;
             }
             _ => {}
@@ -271,8 +270,8 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                 println!("{}", style("💡 Hint: /memories is deprecated. Use `/memory [query]` instead.").yellow());
             }
 
-            if let Some(ref mut memory_engine) = engine.memory {
-                if let Ok(workspace_dir) = std::env::current_dir() {
+            if let Some(ref mut memory_engine) = engine.memory
+                && let Ok(workspace_dir) = std::env::current_dir() {
                     let workspace_str = workspace_dir.to_string_lossy().to_string();
                     if raw_arg == "--clear" {
                         match memory_engine.clear_workspace(&workspace_str) {
@@ -318,7 +317,6 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                         }
                     }
                 }
-            }
             continue;
         }
 
@@ -618,11 +616,10 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         }
 
         // Flush metrics to disk after every turn so /evolve can see them immediately
-        if let Some(m) = &engine.metrics {
-            if let Ok(state_dir) = config::get_state_dir() {
+        if let Some(m) = &engine.metrics
+            && let Ok(state_dir) = config::get_state_dir() {
                 let _ = m.flush_to_disk(&state_dir.join("sessions"));
             }
-        }
 
         // Save SONA state after every turn
         if let Some(ref sona) = engine.sona {

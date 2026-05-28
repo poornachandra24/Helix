@@ -77,11 +77,8 @@ impl Tool for McpWrappedTool {
                     text.push_str(&t.text);
                 }
                 RawContent::Resource(r) => {
-                    match &r.resource {
-                        ResourceContents::TextResourceContents { text: t, .. } => {
-                            text.push_str(t);
-                        }
-                        _ => {}
+                    if let ResourceContents::TextResourceContents { text: t, .. } = &r.resource {
+                        text.push_str(t);
                     }
                 }
                 _ => {}
@@ -99,6 +96,12 @@ impl Tool for McpWrappedTool {
 /// Global registry/holder for spawned MCP services.
 pub struct McpRegistry {
     pub services: Vec<RunningService<RoleClient, ()>>,
+}
+
+impl Default for McpRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl McpRegistry {

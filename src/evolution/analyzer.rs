@@ -26,11 +26,10 @@ impl Analyzer {
         
         let mut summaries = Vec::new();
         for path in entries {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(summary) = serde_json::from_str::<SessionSummary>(&content) {
+            if let Ok(content) = fs::read_to_string(&path)
+                && let Ok(summary) = serde_json::from_str::<SessionSummary>(&content) {
                     summaries.push(summary);
                 }
-            }
         }
 
         if summaries.is_empty() {

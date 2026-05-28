@@ -250,15 +250,13 @@ impl Engine {
                             memory_str.push_str(&format!("- {} (similarity: {:.2})\n", m.text, m.score));
                         }
                         final_system_prompt.push_str(&memory_str);
-                    } else {
-                        if let Some(ref tx) = stream_tx {
-                            let bullet = style("◇").color256(244);
-                            let msg = format!(
-                                "  {} Memory: No matching memories found in workspace",
-                                bullet
-                            );
-                            let _ = tx.send(format!("\x1b[T{}", msg));
-                        }
+                    } else if let Some(ref tx) = stream_tx {
+                        let bullet = style("◇").color256(244);
+                        let msg = format!(
+                            "  {} Memory: No matching memories found in workspace",
+                            bullet
+                        );
+                        let _ = tx.send(format!("\x1b[T{}", msg));
                     }
                 }
             }
@@ -275,17 +273,15 @@ impl Engine {
         ).await;
 
         // 2. Commit this turn to memory on success
-        if let Ok(ref text) = result {
-            if let Some(ref mut memory_engine) = self.memory {
-                if let Ok(workspace_dir) = std::env::current_dir() {
+        if let Ok(ref text) = result
+            && let Some(ref mut memory_engine) = self.memory
+                && let Ok(workspace_dir) = std::env::current_dir() {
                     let workspace_str = workspace_dir.to_string_lossy().to_string();
                     let memory_text = format!("User: {}\nAssistant: {}", input, text);
                     if let Err(e) = memory_engine.insert(&memory_text, None, &workspace_str) {
                         tracing::error!("Failed to save memory: {}", e);
                     }
                 }
-            }
-        }
 
         // Record metrics regardless of success/failure
         if let Some(ref mut collector) = self.metrics {
@@ -301,7 +297,7 @@ impl Engine {
         }
 
         // Finalize SONA Trajectory
-        if let (Some(ref sona_engine), Some(mut trajectory)) = (self.sona.as_ref(), sona_trajectory) {
+        if let (Some(sona_engine), Some(mut trajectory)) = (self.sona.as_ref(), sona_trajectory) {
             let is_err = result.is_err();
             let mut quality = 1.0f32;
             quality -= (turn_healer_retries as f32) * 0.15;
@@ -341,10 +337,8 @@ impl Engine {
                         sona_tag, style(log_msg).color256(117)
                     ));
                 }
-            } else {
-                if let Some(log_msg) = sona_engine.tick() {
-                    tracing::info!("{}", log_msg);
-                }
+            } else if let Some(log_msg) = sona_engine.tick() {
+                tracing::info!("{}", log_msg);
             }
         }
 
@@ -377,9 +371,7 @@ impl Engine {
                 *compaction_fired_out = true;
                 tracing::info!("Context compacted at step {}", step);
                 if let Some(ref tx) = stream_tx {
-                    let msg = format!(
-                        "  Compact: shrinking message history"
-                    );
+                    let msg = "  Compact: shrinking message history".to_string();
                     let _ = tx.send(format!("\x1b[T{}", msg));
                 }
             }

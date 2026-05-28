@@ -19,6 +19,12 @@ pub struct EvolutionState {
     pub pending_gate_hash: Option<String>,
 }
 
+impl Default for EvolutionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EvolutionState {
     pub fn new() -> Self {
         Self { pending_diff: None, pending_gate_hash: None }
@@ -57,6 +63,11 @@ pub async fn handle_evolve(config: &AppConfig, state: &mut EvolutionState, dry_r
         Ok(d) => d,
         Err(e) => { println!("✘ Proposer failed: {}", e); return; }
     };
+
+    // Save proposed diff to file for diagnostics
+    let target_dir = project_root.join("target");
+    let _ = fs::create_dir_all(&target_dir);
+    let _ = fs::write(target_dir.join("pending_evolution.diff"), &diff);
 
     println!("{}", style("◆ Running Security Gates...").cyan());
     let validator = Validator::new(&project_root);

@@ -75,8 +75,8 @@ impl AppConfig {
 
     pub async fn resolve_best_provider(&self, client: &Client) -> Provider {
         // 1. If active_provider is not "auto", try to get it.
-        if self.active_provider != "auto" {
-            if let Some(p) = self.providers.iter().find(|p| p.name == self.active_provider) {
+        if self.active_provider != "auto"
+            && let Some(p) = self.providers.iter().find(|p| p.name == self.active_provider) {
                 tracing::info!("Probing active provider '{}' ({})", p.name, p.base_url);
                 if check_provider_health(client, p).await {
                     return p.clone();
@@ -84,7 +84,6 @@ impl AppConfig {
                     tracing::warn!("Active provider '{}' is offline. Failover activated...", p.name);
                 }
             }
-        }
 
         // 2. Either active_provider is "auto" or it is offline. Probe all configured providers.
         let mut candidates = Vec::new();

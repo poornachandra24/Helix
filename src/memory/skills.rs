@@ -24,17 +24,15 @@ impl SkillRegistry {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
                 let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
-                if path.is_file() && matches!(ext, "txt" | "md") {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        if !content.trim().is_empty() {
+                if path.is_file() && matches!(ext, "txt" | "md")
+                    && let Ok(content) = fs::read_to_string(&path)
+                        && !content.trim().is_empty() {
                             sections.push(format!(
                                 "--- Skill: {} ---\n{}",
                                 path.file_name().unwrap_or_default().to_string_lossy(),
                                 content.trim()
                             ));
                         }
-                    }
-                }
             }
         }
 

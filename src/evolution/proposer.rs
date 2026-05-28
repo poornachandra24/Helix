@@ -31,10 +31,15 @@ Enclose the diff in ```diff ... ``` tags.
 - The diff must apply cleanly (patch -p1) and compile with zero warnings";
 
         let mut source_content = String::new();
-        for file in &["src/engine.rs", "src/context.rs", "src/model.rs"] {
+        for file in &[
+            "src/core/engine.rs",
+            "src/core/context.rs",
+            "src/model/mod.rs",
+            "src/model/registry.rs",
+        ] {
             let path = project_root.join(file);
             if let Ok(content) = fs::read_to_string(&path) {
-                source_content.push_str(&format!("--- a/{}\n+++\n{}\n\n", file, content));
+                source_content.push_str(&format!("// File: {}\n{}\n\n", file, content));
             }
         }
 

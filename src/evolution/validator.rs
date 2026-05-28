@@ -239,8 +239,14 @@ async fn apply_patch_to_temp(src: &Path, dest: &Path, diff: &str) -> Result<()> 
 
 /// Run `cargo <args>` in a directory. Returns stderr on failure.
 async fn run_cargo(dir: &Path, args: &[&str]) -> std::result::Result<(), String> {
+    let workspace_target = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("target")
+        .join("evolve-shared");
+
     let output = Command::new("cargo")
         .args(args)
+        .env("CARGO_TARGET_DIR", workspace_target)
         .current_dir(dir)
         .output()
         .await

@@ -235,38 +235,30 @@ pub async fn build_context(
 pub fn count_omitted_turns(messages: &[serde_json::Value]) -> usize {
     let mut total = 0;
     for msg in messages {
-        if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
-            if content.contains("intermediate turns were omitted") {
-                if let Some(part) = content.split("intermediate turns").next() {
-                    if let Some(num_str) = part.split(':').last() {
-                        if let Some(num_only) = num_str.trim().split_whitespace().next() {
-                            if let Ok(num) = num_only.parse::<usize>() {
+        if let Some(content) = msg.get("content").and_then(|v| v.as_str())
+            && content.contains("intermediate turns were omitted")
+                && let Some(part) = content.split("intermediate turns").next()
+                    && let Some(num_str) = part.split(':').next_back()
+                        && let Some(num_only) = num_str.split_whitespace().next()
+                            && let Ok(num) = num_only.parse::<usize>() {
                                 total += num;
                             }
-                        }
-                    }
-                }
-            }
-        }
     }
     total
 }
 
 pub fn load_sona_state(data_dir: &std::path::Path, sona: &ruvector_sona::SonaEngine) {
     let state_path = data_dir.join("sona_state.json");
-    if state_path.exists() {
-        if let Ok(json) = std::fs::read_to_string(&state_path) {
+    if state_path.exists()
+        && let Ok(json) = std::fs::read_to_string(&state_path) {
             let _ = sona.coordinator().load_state(&json);
         }
-    }
     let weights_path = data_dir.join("sona_weights.json");
-    if weights_path.exists() {
-        if let Ok(json) = std::fs::read_to_string(&weights_path) {
-            if let Ok((down, up)) = serde_json::from_str::<(Vec<f32>, Vec<f32>)>(&json) {
+    if weights_path.exists()
+        && let Ok(json) = std::fs::read_to_string(&weights_path)
+            && let Ok((down, up)) = serde_json::from_str::<(Vec<f32>, Vec<f32>)>(&json) {
                 let _ = sona.coordinator().restore_micro_lora_weights(down, up);
             }
-        }
-    }
 }
 
 pub fn save_sona_state(data_dir: &std::path::Path, sona: &ruvector_sona::SonaEngine) {
