@@ -24,7 +24,6 @@
 - [ ] Generate docs with `cargo doc --no-deps` and publish to GitHub Pages (or docs.rs).
 - [ ] Add `docs/` folder with:
   - Architecture overview.
-  - Self‑evolution loop description.
   - Plugin development guide.
   - Edge‑deployment guide.
 - [ ] Add `CHANGELOG.md` following Keep a Changelog format.
@@ -41,7 +40,6 @@
 - [ ] Draft a `GOVERNANCE.md` describing:
   - Core maintainers.
   - RFC process for major changes.
-  - Evolution‑Committee role for reviewing auto‑generated patches.
 - [ ] Add a `FUNDING.yml` with OpenCollective, GitHub Sponsors, Liberapay.
 
 ## 6️⃣ Security & Privacy

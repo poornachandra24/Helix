@@ -170,33 +170,60 @@ pub fn scan_diff(diff: &str, locked_files: &[String]) -> SecurityScanResult {
     let mut violations = Vec::new();
     let mut locked_file_touches = Vec::new();
 
+    let mut current_file = String::new();
+    let mut file_additions = std::collections::HashMap::new();
+
     for (i, line) in diff.lines().enumerate() {
         let line_no = i + 1;
 
         // Check for locked file in diff header
         if line.starts_with("+++ b/") {
-            let path = line.trim_start_matches("+++ b/");
+            let path = line.trim_start_matches("+++ b/").to_string();
+            current_file = path.clone();
             for locked in locked_files {
-                if path == locked || path.ends_with(locked.as_str()) {
+                if path == *locked || path.ends_with(locked.as_str()) {
                     locked_file_touches.push(locked.clone());
                 }
             }
             continue;
         }
 
-        // Only scan addition lines for forbidden patterns
+        // Only accumulate addition lines for forbidden patterns
         if !line.starts_with('+') || line.starts_with("+++") {
             continue;
         }
 
         let content = &line[1..]; // strip the leading `+`
+        file_additions
+            .entry(current_file.clone())
+            .or_insert_with(Vec::new)
+            .push((line_no, content.to_string()));
+    }
+
+    // Now, scan the accumulated additions for each file
+    for (file_path, additions) in file_additions {
+        // Construct the full additions block
+        let mut full_additions = String::new();
+        for (_, content) in &additions {
+            full_additions.push_str(content);
+            full_additions.push('\n');
+        }
+
+        // Preprocess to strip all comments and whitespace
+        let cleaned = preprocess_string(&full_additions);
+
+        // Check against patterns
         for pat in FORBIDDEN_PATTERNS {
-            if pat.hard_block && content.contains(pat.pattern) {
+            // Clean the pattern itself to match
+            let clean_pat = preprocess_string(pat.pattern);
+            if pat.hard_block && (cleaned.contains(&clean_pat) || full_additions.contains(pat.pattern)) {
+                // Find the first line number that contributed to this block
+                let first_line_no = additions.first().map(|(n, _)| *n).unwrap_or(0);
                 violations.push(SecurityViolation {
-                    line_number: line_no,
+                    line_number: first_line_no,
                     pattern: pat.pattern,
                     reason: pat.reason,
-                    line_content: line.to_string(),
+                    line_content: format!("File: {} (detected pattern '{}' in additions)", file_path, pat.pattern),
                 });
             }
         }
@@ -204,3 +231,35 @@ pub fn scan_diff(diff: &str, locked_files: &[String]) -> SecurityScanResult {
 
     SecurityScanResult { violations, locked_file_touches }
 }
+
+fn preprocess_string(s: &str) -> String {
+    let mut cleaned = String::new();
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if in_line_comment {
+            if c == '\n' {
+                in_line_comment = false;
+            }
+        } else if in_block_comment {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_block_comment = false;
+            }
+        } else {
+            if c == '/' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_line_comment = true;
+            } else if c == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                in_block_comment = true;
+            } else if !c.is_whitespace() {
+                cleaned.push(c);
+            }
+        }
+    }
+    cleaned
+}
+

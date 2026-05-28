@@ -36,7 +36,7 @@ Given `content_width = W`:
 
 ### Rounded corners
 
-All boxes use Unicode rounded box-drawing corners to avoid the hard "computer terminal" feel of square corners. Indentation is exactly 2 spaces:
+All boxes use Unicode rounded box-drawing corners for a clean console layout. Indentation is exactly 2 spaces:
 
 ```
   ╭── Label ────────────────────────╮
@@ -76,7 +76,7 @@ println!("{}", border_color.apply_to(format!("╭── {} {}╮",
 | Values | White | White content text |
 | Status indicator `●` | Cyan (Bold) | Header status dot |
 | Status text | Green (Bold) | Online status indicator |
-| `/help` hint | Cyan | Cyber cyan |
+| `/help` hint | Cyan | Cyan colored hint |
 
 ### User Input box (`src/cli/repl.rs`)
 
@@ -98,7 +98,7 @@ println!("{}", border_color.apply_to(format!("╭── {} {}╮",
 
 | Element | Color | Description |
 |---------|-------|-------------|
-| Spinner frame | Cyan (Bold) | Cyber cyan |
+| Spinner frame | Cyan (Bold) | Cyan frame |
 | Spinner suffix text | Dimmed | Dimmed/grey text |
 
 ### Post-response footnotes (`src/core/engine.rs`)
@@ -109,7 +109,7 @@ println!("{}", border_color.apply_to(format!("╭── {} {}╮",
 | Memory no-match bullet `◇` | Dimmed | Dim grey |
 | Micro-LoRA hint | Dimmed | Dim grey |
 | Tool dispatch `⦿` | Yellow | Amber/yellow |
-| Tool completed `✓` | Green | Matrix green |
+| Tool completed `✓` | Green | Terminal green |
 | Loop label `· loop N/20` | Dimmed | Subtle dark grey |
 | SONA label `· [sona]` | Dimmed | Mid grey |
 | SONA quality (good > 0.8) | Green | Terminal green |

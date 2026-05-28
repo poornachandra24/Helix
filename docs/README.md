@@ -9,15 +9,15 @@ Welcome to the Helix developer documentation. This directory contains detailed a
     *   Includes data flow, initialization, retrieval, and turn-committing flowcharts and sequence diagrams.
     *   Contains memory footprint profiles (baseline ~227 MiB RSS), thread pool resource allocation analysis, and verification commands.
 
-2.  **[Self-Evolution Loop and Security Gates](self_evolution.md)**
-    *   Exposes how Helix analyzes its execution logs, runs LLM patch proposals, enforces sandboxed security gates, and benchmarks performance regressions before asking for human approval.
-    *   Contains the complete evolutionary state transition sequence diagrams.
-
-3.  **[Model Context Protocol (MCP) Client Subsystem](mcp_integration.md)**
+2.  **[Model Context Protocol (MCP) Client Subsystem](mcp_integration.md)**
     *   Explains how external tool servers are dynamically loaded at runtime via standard stdin/stdout JSON-RPC pipes.
     *   Includes process life-cycle sequence diagrams and configuration blueprints.
 
-4.  **[Terminal UI Design System](ux_design.md)**
+3.  **[Terminal UI Design System](ux_design.md)**
     *   Covers dynamic terminal-width layout, box math formulas, color token definitions, and word-wrap implementation.
     *   Documents the two-tone conversation box scheme (blue `You` / yellow `Helix`), post-response footnote format, SONA quality footnote, and agent loop counter.
     *   Explains why top borders are split into separate `print!` calls to prevent ANSI color bleed.
+
+4.  **[Skill Registry Subsystem](skills.md)**
+    *   Details the scanning and loading of modular `.md` and `.txt` instruction files from the user configuration folder.
+    *   Explains how domain-specific behaviors are dynamically injected into the system prompt context.

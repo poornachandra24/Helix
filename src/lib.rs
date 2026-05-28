@@ -8,7 +8,7 @@ pub mod error;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 extern crate blas_src;
 
-pub mod evolution;
+
 pub mod memory;
 pub mod model;
 pub mod tools;

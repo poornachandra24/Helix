@@ -26,26 +26,7 @@ enum Command {
     },
     /// Configure models and providers
     Config,
-    /// Run the benchmark suite against the current model
-    Benchmark {
-        /// Save results as the new baseline
-        #[arg(long)]
-        update_baseline: bool,
 
-        /// Run the offline CPU/memory execution microbenchmarks
-        #[arg(long)]
-        local: bool,
-    },
-    /// Run the self-evolution analyzer and optimizer (can run automated)
-    Evolve {
-        /// Apply proposed changes automatically if validation passes
-        #[arg(long)]
-        auto_approve: bool,
-
-        /// Dry-run: analyze telemetry but skip writing edits
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
 
 #[tokio::main]
@@ -73,15 +54,6 @@ async fn main() -> Result<()> {
 
         Some(Command::Run { goal }) => {
             cli::run::run_single(&app_config, goal).await?;
-        }
-
-        Some(Command::Benchmark { update_baseline, local }) => {
-            cli::bench::run_benchmark(&app_config, *update_baseline, *local).await?;
-        }
-
-        Some(Command::Evolve { auto_approve, dry_run }) => {
-            let mut state = helix::evolution::EvolutionState::new();
-            helix::evolution::handle_evolve(&app_config, &mut state, *dry_run, *auto_approve).await;
         }
 
         Some(Command::Chat) | None => {

@@ -11,6 +11,24 @@ use crate::model::{ModelAdapter, ModelResponse, ToolCall};
 use super::persistence::Session;
 use crate::tools::ToolRegistry;
 
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut norm_a = 0.0;
+    let mut norm_b = 0.0;
+    for (val_a, val_b) in a.iter().zip(b.iter()) {
+        dot += val_a * val_b;
+        norm_a += val_a * val_a;
+        norm_b += val_b * val_b;
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a.sqrt() * norm_b.sqrt())
+}
+
 pub struct Engine {
     /// Boxed model adapter — swap providers at runtime without recompiling.
     pub model: Box<dyn ModelAdapter>,
@@ -23,10 +41,12 @@ pub struct Engine {
     max_retries: usize,
     /// Metrics collector. None in headless/benchmark mode to avoid disk writes.
     pub metrics: Option<MetricsCollector>,
-    /// TurboQuant-powered local semantic memory store.
+    /// Local quantized semantic memory store.
     pub memory: Option<crate::memory::HelixMemoryEngine>,
     /// SONA self-optimizing engine.
     pub sona: Option<SonaEngine>,
+    /// Pre-computed embeddings for greetings and starter queries.
+    pub semantic_cache: Vec<(String, String, Vec<f32>)>,
 }
 
 impl Engine {
@@ -47,10 +67,34 @@ impl Engine {
             metrics: None,
             memory: None,
             sona: None,
+            semantic_cache: vec![],
         }
     }
 
-    pub fn with_memory(mut self, memory: crate::memory::HelixMemoryEngine) -> Self {
+    pub fn with_memory(mut self, mut memory: crate::memory::HelixMemoryEngine) -> Self {
+        let candidates = vec![
+            ("hi", "Hello! How can I help you today?"),
+            ("hello", "Hello! How can I help you today?"),
+            ("hey", "Hey there! How can I help you today?"),
+            ("sup", "Not much! How can I help you with your codebase today?"),
+            ("yo", "Yo! How can I help you today?"),
+            ("hello there", "General Kenobi! Or rather, hello! How can I help you today?"),
+            ("hi there", "Hello! How can I help you today?"),
+            ("how are you", "I'm doing great, thank you! Ready to help you with your code."),
+            ("what are you", "I am Helix, a local, high-performance, tool-calling AI agent built in Rust."),
+            ("who are you", "I am Helix, your local AI coding assistant."),
+            ("what is this", "This is Helix, an autonomous coding agent harness designed to run with local or cloud LLMs."),
+            ("how does this work", "Helix connects to your LLM provider of choice, manages workspace memories, and executes tools like bash and file operations to help you build software."),
+            ("what can you do", "I can search and read workspace files, execute sandboxed shell commands, run local tools via the Model Context Protocol (MCP), and help you write or debug code."),
+        ];
+
+        let mut cache = Vec::new();
+        for (q, r) in candidates {
+            if let Ok(emb) = memory.embed_text(q) {
+                cache.push((q.to_string(), r.to_string(), emb));
+            }
+        }
+        self.semantic_cache = cache;
         self.memory = Some(memory);
         self
     }
@@ -77,6 +121,82 @@ impl Engine {
     // ──────────────────────────────────────────────
     // Internal helpers
     // ──────────────────────────────────────────────
+
+    /// Attempt to get a valid (non-parse-error) response, retrying via the
+    /// Local Healer on malformed tool JSON.
+    ///
+    /// Returns `(response, retries_used)` so the caller can record healer activity.
+    fn classify_and_diagnose_parse_error(&self, error: &str, raw_text: &str) -> String {
+        let mut tool_name = None;
+        if let Ok(parsed) = serde_json::from_str::<Value>(raw_text) {
+            if let Some(name) = parsed.get("name").and_then(|n| n.as_str()) {
+                tool_name = Some(name.to_string());
+            } else if let Some(calls) = parsed.as_array() {
+                if !calls.is_empty() {
+                    tool_name = calls[0].get("name").and_then(|n| n.as_str()).map(|n| n.to_string());
+                }
+            }
+        } else {
+            if let Some(start_idx) = raw_text.find("\"name\"") {
+                let sub = &raw_text[start_idx..];
+                if let Some(colon_idx) = sub.find(':') {
+                    let val_sub = &sub[colon_idx + 1..];
+                    if let Some(q1) = val_sub.find('"') {
+                        let after_q1 = &val_sub[q1 + 1..];
+                        if let Some(q2) = after_q1.find('"') {
+                            tool_name = Some(after_q1[..q2].to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut diagnosis = format!(
+            "Your tool call failed to parse.\nError details: {}\n",
+            error
+        );
+
+        if let Some(ref name) = tool_name {
+            if self.tools.get(name).is_none() {
+                let valid_names: Vec<String> = self.tools.descriptors().iter().map(|d| d.name.clone()).collect();
+                diagnosis.push_str(&format!(
+                    "Tool name '{}' is NOT registered. Available tools are: {:?}.\nChoose only from the registered tools.\n",
+                    name, valid_names
+                ));
+            } else {
+                let tool = self.tools.get(name).unwrap();
+                let schema = tool.parameters_schema();
+                diagnosis.push_str(&format!(
+                    "For tool '{}', the expected JSON parameter schema is:\n{}\n",
+                    name, serde_json::to_string_pretty(&schema).unwrap_or_default()
+                ));
+                
+                if let Ok(parsed) = serde_json::from_str::<Value>(raw_text) {
+                    let args = parsed.get("arguments").or_else(|| parsed.get("args")).unwrap_or(&parsed);
+                    if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+                        let mut missing = Vec::new();
+                        for req_field in required {
+                            if let Some(field_name) = req_field.as_str() {
+                                if args.get(field_name).is_none() {
+                                    missing.push(field_name);
+                                }
+                            }
+                        }
+                        if !missing.is_empty() {
+                            diagnosis.push_str(&format!(
+                                "Critical: Missing required fields: {:?}. You MUST provide these fields.\n",
+                                missing
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            diagnosis.push_str("Suggestions:\n- Make sure all quotes and commas are properly closed.\n- Follow the markdown ```json ... ``` format precisely.\n- Do not include conversational text or preamble inside the JSON block if calling a tool.\n");
+        }
+
+        diagnosis
+    }
 
     /// Attempt to get a valid (non-parse-error) response, retrying via the
     /// Local Healer on malformed tool JSON.
@@ -110,10 +230,12 @@ impl Engine {
                     println!("⚠️  {}", style("[Syntax Error: Auto-healing...]").yellow());
                     tracing::warn!(%error, "Tool JSON parse error, healing");
 
+                    let diagnosis = self.classify_and_diagnose_parse_error(&error, &raw_text);
+
                     local_messages.push(json!({"role": "assistant", "content": raw_text}));
                     local_messages.push(json!({
                         "role": "user",
-                        "content": format!("Your tool call failed to parse: {}. Please respond with valid JSON.", error)
+                        "content": diagnosis
                     }));
                 }
             }
@@ -214,13 +336,81 @@ impl Engine {
         } else {
             vec![0.0; 384]
         };
-        let sona_trajectory = self.sona.as_ref().map(|s| s.begin_trajectory(query_embedding));
+        let sona_trajectory = self.sona.as_ref().map(|s| s.begin_trajectory(query_embedding.clone()));
+
+        // ── Check Semantic Cache ─────────────────────────────
+        let cleaned = input.trim().to_lowercase();
+        let mut cache_hit: Option<String> = None;
+
+        // 1. Lexical fallback (instant)
+        for (q, r, _) in &self.semantic_cache {
+            if cleaned == *q {
+                cache_hit = Some(r.clone());
+                break;
+            }
+        }
+
+        // 2. Semantic lookup using the pre-computed embeddings
+        if cache_hit.is_none() && !query_embedding.iter().all(|&x| x == 0.0) {
+            for (q, r, emb) in &self.semantic_cache {
+                let sim = cosine_similarity(&query_embedding, emb);
+                if sim > 0.88 {
+                    tracing::info!("Semantic cache hit for '{}' matching '{}' with similarity {:.4}", cleaned, q, sim);
+                    cache_hit = Some(r.clone());
+                    break;
+                }
+            }
+        }
+
+        if let Some(response) = cache_hit {
+            // Echo inputs to local session/global logs
+            self.global_messages.push(json!({"role": "user", "content": input}));
+            self.session.append(json!({"event": "user_input", "content": input}))?;
+
+            // Stream response to the user with a dynamic token pacing animation
+            if let Some(ref tx) = stream_tx {
+                // Clear the querying semantic memory spinner if it started
+                let _ = tx.send("\x03".to_string());
+                for token in response.split_inclusive(char::is_whitespace) {
+                    let _ = tx.send(token.to_string());
+                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                }
+                let _ = tx.send("\x04".to_string());
+            }
+
+            self.global_messages.push(json!({"role": "assistant", "content": response}));
+            self.session.append(json!({"event": "assistant_output", "content": response}))?;
+
+            // Commit to memory
+            if let Some(ref mut memory_engine) = self.memory
+                && let Ok(workspace_dir) = std::env::current_dir() {
+                    let workspace_str = workspace_dir.to_string_lossy().to_string();
+                    let memory_text = format!("User: {}\nAssistant: {}", input, response);
+                    let _ = memory_engine.insert(&memory_text, None, &workspace_str);
+                }
+
+            // Record metrics
+            if let Some(ref mut collector) = self.metrics {
+                let m = timer.finish(
+                    turn_index,
+                    0, // steps
+                    0, // tool calls
+                    0, // healer retries
+                    false, // compaction fired
+                    false, // is_err
+                );
+                collector.record(m);
+            }
+
+            return Ok(response);
+        }
 
         self.global_messages.push(json!({"role": "user", "content": input}));
         self.session.append(json!({"event": "user_input", "content": input}))?;
 
         // 1. Retrieve relevant workspace memories and append them to the system prompt
         let mut final_system_prompt = system_prompt.to_string();
+        let mut retrieved_texts = Vec::new();
         if let Some(ref mut memory_engine) = self.memory {
             if let Some(ref tx) = stream_tx {
                 let _ = tx.send("\x02".to_string());
@@ -248,6 +438,7 @@ impl Engine {
                         let mut memory_str = String::from("\n\n### RELEVANT MEMORIES (from this workspace):\n");
                         for m in matches {
                             memory_str.push_str(&format!("- {} (similarity: {:.2})\n", m.text, m.score));
+                            retrieved_texts.push(m.text.clone());
                         }
                         final_system_prompt.push_str(&memory_str);
                     } else if let Some(ref tx) = stream_tx {
@@ -271,6 +462,10 @@ impl Engine {
             &mut turn_healer_retries,
             &mut turn_compaction_fired,
         ).await;
+
+        if let Some(ref tx) = stream_tx_clone {
+            let _ = tx.send("\x04".to_string());
+        }
 
         // 2. Commit this turn to memory on success
         if let Ok(ref text) = result
@@ -311,10 +506,29 @@ impl Engine {
             }
             let final_quality = quality.clamp(0.0, 1.0);
 
-            let mut activations = vec![0.0f32; 384];
-            activations[0] = turn_steps as f32;
-            activations[1] = turn_healer_retries as f32;
-            trajectory.add_step(activations, vec![], final_quality);
+            // Compute target embedding based on retrieved memories
+            let mut avg_target = vec![0.0f32; 384];
+            let mut count = 0;
+            if let Some(ref mut memory_engine) = self.memory {
+                for text in &retrieved_texts {
+                    if let Ok(emb) = memory_engine.embed_text(text) {
+                        for (i, val) in emb.iter().enumerate() {
+                            avg_target[i] += val;
+                        }
+                        count += 1;
+                    }
+                }
+            }
+            if count > 0 {
+                for val in avg_target.iter_mut() {
+                    *val /= count as f32;
+                }
+            } else {
+                avg_target = query_embedding.clone();
+            }
+
+            // Train the LoRA projection to map from the query embedding to the target (successful document centroid)
+            trajectory.add_step(query_embedding, avg_target, final_quality);
             trajectory.set_model_route(self.model.model_name());
 
             sona_engine.end_trajectory(trajectory, final_quality);
@@ -482,3 +696,22 @@ impl Engine {
         anyhow::bail!("Stopped after {} iterations without a final answer", self.max_iterations)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cosine_similarity() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![1.0, 0.0, 0.0];
+        assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-5);
+
+        let c = vec![0.0, 1.0, 0.0];
+        assert!(cosine_similarity(&a, &c).abs() < 1e-5);
+
+        let d = vec![0.70710678, 0.70710678, 0.0];
+        assert!((cosine_similarity(&a, &d) - 0.70710678).abs() < 1e-5);
+    }
+}
+

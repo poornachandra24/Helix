@@ -1,41 +1,32 @@
-# ⚡ Helix
+# Helix
 
-An autonomous, high-performance, tool-calling AI agent CLI built in Rust.  
-Designed as a research-grade engine giving you absolute control over agent loops, context windows, execution tracing, and **Self-Evolution** — wrapped in a premium terminal UI.
-
----
-
-## 🧬 Self-Evolving Architecture
-
-Helix runs two distinct self-optimization loops depending on the environment (development vs. production distribution):
-
-### 1. Neural-Level Adaptation (SONA - Self-Optimizing Neural Architecture)
-*   **Availability**: Continuous in all environments (runs out-of-the-box, no toolchain needed).
-*   **Mechanism**: After every chat turn, the SONA engine computes a trajectory quality score based on steps, tool errors, and healer corrects. It then performs real-time Micro-LoRA (Low-Rank Adaptation) weight updates on the query vector.
-*   **Benefit**: Keeps semantic memory retrieval dynamically tuned to your specific workspace files and coding habits.
-
-### 2. Code-Level Self-Evolution (`/evolve`)
-*   **Availability**: Local Development Mode (requires the Git source repository and the Rust toolchain/`cargo`).
-*   **Mechanism**:
-    1.  **Bottleneck Analysis**: Analyzes local session telemetry (latency, token waste, tool correction rates).
-    2.  **LLM Patch Proposal**: Prompts the Large Language Model (LLM) to write a targeted patch (unified diff) addressing the performance bottlenecks.
-    3.  **Compilation & Linter Gate**: Helix applies the patch and runs `cargo check`, `cargo test`, and `cargo clippy`. If any error or warning is introduced, the patch is rejected.
-    4.  **Immutable Security Scan**: Rejects patches introducing `unsafe` code blocks, spawning unauthorized processes, or mutating locked core safety modules.
-    5.  **No-Regression Benchmark**: Executes the headless benchmark suite against `benchmarks/baseline.json`. If performance declines, it rolls back changes.
-    6.  **Human Gate (`/approve`)**: Helix cannot self-authorize changes; an operator must manually review the diff and type `/approve` to hard-commit the patch to Git.
+A high-performance, tool-calling AI agent command-line interface built in Rust.  
+Designed as a research-oriented tool-calling harness, Helix provides fine-grained control over agent execution loops, dynamic context window management, session tracing, and local codebase retrieval alignment.
 
 ---
 
-## 🚀 Core Features
+## ⚙️ Optimization & Adaptation Mechanisms
 
-- **Local Semantic Memory**: Powered by `turbovec` (a 4-bit Lloyd-Max quantized SIMD [Single Instruction, Multiple Data] vector index) and `fastembed` (offline ONNX [Open Neural Network Exchange] `BAAI/bge-small-en-v1.5` embeddings), paired with SQLite metadata. Baseline footprint ~227 MiB RSS, scaling at ~3.2 MiB per 100k memories. See [docs/memory_architecture.md](docs/memory_architecture.md).
-- **SONA Neural Adaptation**: After every turn, the SONA engine records a trajectory quality score (0–1) and applies Micro-LoRA weight updates to the semantic memory query path — making retrieval progressively better-tuned to your workspace over time.
-- **Model Agnostic & Seamless Swapping**: Compatible with any OpenAI-compatible API (Application Programming Interface) provider (OpenAI, OpenRouter) and Ollama native format. Switch mid-session using `/use`.
-- **"Local Healer" Engine**: Intercepts malformed tool-calling JSON from open-weights models and automatically prompts for self-correction (up to 3 retries).
-- **Secure Tool Execution**: Built-in `bash` tool with strict interactive confirmation — the agent cannot execute shell operations without explicit approval.
-- **Markdown Fallback Parsing**: Extracts and executes tool calls encoded in ` ```json ``` ` markdown blocks if a model bypasses official API tool calls.
-- **Zero-Leak Async Execution**: Powered by `tokio`. `Ctrl+C` instantly tears down the execution future without memory leaks.
-- **Terminal-Adaptive Layout**: All UI boxes dynamically read terminal column width (`console::Term::stdout().size_checked()`) and clamp content between 50–110 columns. Unicode characters are measured by display width (`.chars().count()`), not byte count, to prevent overflow.
+Helix implements a feedback loop to improve retrieval accuracy over time:
+
+### Query Vector Projection Alignment (SONA)
+*   **Availability**: Active in all environments.
+*   **Mechanism**: On turn completion, the engine computes a trajectory quality score based on step metrics, tool errors, and healer retries. When quality is high, the SONA engine updates weights in a lightweight Low-Rank Adaptation (LoRA) projection layer to align the user's initial query vector closer to the centroid embedding of successfully retrieved workspace documents.
+*   **Purpose**: Dynamically adjusts semantic memory query representations to prioritize relevant workspace files and context based on usage history.
+
+---
+
+## 🛠️ Key Capabilities
+
+- **Quantized Semantic Memory Index**: Combines SQLite metadata with a 4-bit Lloyd-Max scalar-quantized SIMD vector index (`turbovec`) and offline ONNX `BAAI/bge-small-en-v1.5` embeddings (`fastembed`). Baseline memory footprint is ~227 MiB RSS, scaling at ~3.2 MiB per 100k memories (see [docs/memory_architecture.md](docs/memory_architecture.md)).
+- **Query Projection Tuning**: Applies gradient adjustments to the LoRA retrieval weights, aligning semantic searches to context that previously led to successful turns.
+- **API & Local Model Agnostic**: Supports any OpenAI-compatible API provider (e.g., OpenAI, OpenRouter) and native Ollama endpoints. Swappable mid-session via `/use`.
+- **Schema-Guided Healer**: Detects malformed JSON tool calls, classifies errors (e.g., missing parameters or invalid tool names), and provides the target schema to the model to prompt automatic self-correction.
+- **Isolated & Secure Sandboxing**: Supports standard containers and sandboxed execution, with strict interactive confirmation prompts for local system tools.
+- **Markdown Tool Parsing**: Extracts and resolves tool invocations embedded in markdown code blocks as a fallback for models lacking native tool-calling outputs.
+- **Graceful Cancellation**: Uses `tokio::select!` to abort pending model requests and system tasks instantly on `Ctrl+C` without leaking background resources.
+- **Active Skill Registry**: Dynamically scans, loads, and injects custom instruction files (`.md` or `.txt` containing guidelines or coding standards) from your data directory into the system prompt context, displaying loaded skills in connection banners and `/status` diagnostics (see [docs/skills.md](docs/skills.md)).
+- **Terminal-Adaptive Box Layouts**: Automatically queries terminal widths to dynamically format, wrap, and pad chat logs cleanly without overflowing console boundaries.
 
 ---
 
@@ -48,7 +39,7 @@ Helix uses a two-tone boxed conversation layout:
 | User input | Cool blue/cyan (adaptive, `blue()` border and header) | `You` |
 | Agent response | Warm amber/gold (adaptive, `yellow()` border and header, markdown formatted) | `Helix` |
 
-Both boxes use rounded Unicode corners (`╭ ╮ ╰ ╯`) and display a `[Elapsed: X.XXs]` timer on the closing border.
+Both boxes use rounded Unicode rounded corners (`╭ ╮ ╰ ╯`) and display an `[Elapsed: X.XXs]` timer on the closing border.
 
 **Post-response footnotes** (dimmed/adaptive, printed after the box closes):
 ```
@@ -90,12 +81,12 @@ cargo run -- -vv
 
 ## 💬 REPL Commands
 
-### General Chat & Context
+### Core Commands & Session Control
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show this command guide |
-| `/status` | Show active model, context budget, SONA & evolution stats |
+| `/status` | Show active model, context budget, SONA & optimization stats |
 | `/clear` | Reset current chat history context |
 | `/config` | Reconfigure active provider / model |
 | `/providers` | List configured API providers |
@@ -105,26 +96,9 @@ cargo run -- -vv
 | `/memory [query]` | Search/manage semantic memory (`--clear` to wipe) |
 | `/exit` \| `/quit` | Exit the REPL session |
 
-### Codebase Optimization (Self-Evolution)
-
-| Command | Description |
-|---------|-------------|
-| `/evolve` | Analyze logs and propose a self-evolution patch |
-| `/evolve --auto-approve` | Analyze, check gates, test, and apply automatically if safe |
-| `/evolve --dry-run` | Analyze metrics but skip proposing edits |
-| `/approve` | Apply the pending evolution diff |
-| `/reject [reason]` | Discard the pending evolution patch |
-
-### Agent Performance Benchmarking
-
-| Command | Description |
-|---------|-------------|
-| `/benchmark` | Run the benchmark suite against the current engine |
-| `/save-baseline` | Save current benchmark results as the new performance baseline |
-
 ---
 
-## 🔌 Model Context Protocol (MCP)
+## 🔌 Model Context Protocol (INPUT)
 
 Helix natively supports external tool servers conforming to MCP over `stdio` transport. Specify servers in `mcp_config.json` in the current directory or config directory, and Helix will spawn, initialize, and register their tool schemas on boot.
 
@@ -137,6 +111,6 @@ See [docs/mcp_integration.md](docs/mcp_integration.md) for details.
 | Document | Contents |
 |----------|----------|
 | [docs/memory_architecture.md](docs/memory_architecture.md) | Dual-store memory design, data flow, footprint profiles |
-| [docs/self_evolution.md](docs/self_evolution.md) | Evolution loop, security gates, regression contract |
 | [docs/mcp_integration.md](docs/mcp_integration.md) | MCP client subsystem, process lifecycle, config |
 | [docs/ux_design.md](docs/ux_design.md) | Terminal UI system, color tokens, box math, telemetry format |
+| [docs/skills.md](docs/skills.md) | Custom instruction files scanning and prompt injection |

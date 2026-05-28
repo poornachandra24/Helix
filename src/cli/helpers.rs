@@ -15,6 +15,7 @@ pub fn print_banner(
     memory_size: usize,
     patterns_count: usize,
     context_limit: usize,
+    active_skills: &[String],
 ) {
     use comfy_table::{Table, Cell, CellAlignment, ColumnConstraint, Width, Color, Attribute};
     use comfy_table::presets::UTF8_BORDERS_ONLY;
@@ -32,32 +33,18 @@ pub fn print_banner(
 
     println!();
     // Print logo side-by-side with evolution status indicators
-    let dev_env = std::path::Path::new("Cargo.toml").exists();
-
     let neural_status = if patterns_count > 0 {
         format!("{} patterns adapted", patterns_count).green().bold().to_string()
     } else {
         "initialized".dimmed().to_string()
     };
 
-    let mutation_status = if dev_env {
-        "active".green().bold().to_string()
-    } else {
-        "unavailable (dev only)".dimmed().to_string()
-    };
-
-    let gates_status = if dev_env {
-        "armed".red().bold().to_string()
-    } else {
-        "inactive".dimmed().to_string()
-    };
-
     let status_lines = [
         "".to_string(),
-        format!("   🧬 {}", "SELF-EVOLUTION LOOP:".bold().white()),
-        format!("    ├─ Neural Adaptation: {}", neural_status),
-        format!("    ├─ Code Mutation:     {}", mutation_status),
-        format!("    └─ Security Gates:    {}", gates_status),
+        format!("   ⚙️ {}", "RETRIEVAL TUNING:".bold().white()),
+        format!("    └─ Query Alignment:  {}", neural_status),
+        "".to_string(),
+        "".to_string(),
         "".to_string(),
     ];
 
@@ -145,6 +132,15 @@ pub fn print_banner(
     table.add_row(vec![
         Cell::new("SONA STATE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
         Cell::new(&sona_str).fg(Color::White),
+    ]);
+    let skills_str = if active_skills.is_empty() {
+        "none loaded".to_string()
+    } else {
+        format!("{} loaded ({})", active_skills.len(), active_skills.join(", "))
+    };
+    table.add_row(vec![
+        Cell::new("ACTIVE SKILLS").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&skills_str).fg(Color::White),
     ]);
 
     // Row 10: Separator
@@ -278,7 +274,7 @@ pub fn print_status_card(
     model_name: &str,
     memory_size: usize,
     sona: Option<&ruvector_sona::SonaEngine>,
-    has_pending_evolution: bool,
+    active_skills: &[String],
     full_diagnostics: bool,
 ) {
     use comfy_table::{Table, Cell, ColumnConstraint, Width, Color, Attribute};
@@ -326,6 +322,15 @@ pub fn print_status_card(
         Cell::new("SONA State").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
         Cell::new(&sona_str).fg(Color::White),
     ]);
+    let skills_str = if active_skills.is_empty() {
+        "none loaded".to_string()
+    } else {
+        format!("{} loaded ({})", active_skills.len(), active_skills.join(", "))
+    };
+    table.add_row(vec![
+        Cell::new("Active Skills").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(&skills_str).fg(Color::White),
+    ]);
 
     if full_diagnostics {
         // Row 7: Separator
@@ -336,7 +341,7 @@ pub fn print_status_card(
 
         // Row 8: Section Header
         table.add_row(vec![
-            Cell::new("EVOLUTION & NEURAL ARCHITECTURE DIAGNOSTICS").fg(Color::Cyan).add_attribute(Attribute::Bold),
+            Cell::new("OPTIMIZATION & RETRIEVAL TUNING DIAGNOSTICS").fg(Color::Cyan).add_attribute(Attribute::Bold),
             Cell::new(""),
         ]);
 
@@ -370,21 +375,7 @@ pub fn print_status_card(
             Cell::new(&micro_status).fg(Color::White),
         ]);
 
-        let evol_plain = if has_pending_evolution {
-            "1 pending patch (use /approve to apply)".to_string()
-        } else {
-            "0 pending changes (system stable)".to_string()
-        };
-        let mut evol_cell = Cell::new(&evol_plain);
-        if has_pending_evolution {
-            evol_cell = evol_cell.fg(Color::Yellow).add_attribute(Attribute::Bold);
-        } else {
-            evol_cell = evol_cell.fg(Color::White);
-        }
-        table.add_row(vec![
-            Cell::new("Evolutions").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
-            evol_cell,
-        ]);
+
     }
 
     println!("{table}");

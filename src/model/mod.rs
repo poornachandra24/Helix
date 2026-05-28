@@ -2,6 +2,7 @@ pub mod registry;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use futures_util::StreamExt;
 
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -248,6 +249,118 @@ impl OpenAiCompatibleAdapter {
         }
     }
 
+    fn process_stream_line(
+        &self,
+        line: &str,
+        format: &ApiFormat,
+        full_text: &mut String,
+        acc_tool_calls: &mut Vec<AccumulatedToolCall>,
+        stream_tx: &Option<UnboundedSender<String>>,
+    ) -> Result<()> {
+        let json_str = if line.starts_with("data: ") {
+            let content = line.strip_prefix("data: ").unwrap().trim();
+            if content == "[DONE]" {
+                return Ok(());
+            }
+            content
+        } else {
+            line.trim()
+        };
+
+        if json_str.is_empty() {
+            return Ok(());
+        }
+
+        let parsed: Value = match serde_json::from_str(json_str) {
+            Ok(v) => v,
+            Err(_) => return Ok(()), // ignore malformed/non-JSON lines
+        };
+
+        // Extract error
+        if let Some(err) = parsed.get("error") {
+            let msg = err["message"].as_str()
+                .or_else(|| err.as_str())
+                .unwrap_or("unknown API error");
+            anyhow::bail!("API error in stream: {}", msg);
+        }
+
+        match format {
+            ApiFormat::OpenAiCompatible => {
+                if let Some(choices) = parsed.get("choices").and_then(|v| v.as_array())
+                    && !choices.is_empty() {
+                        let delta = &choices[0]["delta"];
+                        
+                        // Text content
+                        if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+                            full_text.push_str(content);
+                            if let Some(tx) = stream_tx {
+                                let _ = tx.send(content.to_string());
+                            }
+                        }
+
+                        // Tool calls
+                        if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                            for tc in tool_calls {
+                                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                if idx >= acc_tool_calls.len() {
+                                    acc_tool_calls.resize(idx + 1, AccumulatedToolCall::default());
+                                }
+                                
+                                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                                    acc_tool_calls[idx].id = Some(id.to_string());
+                                }
+                                if let Some(func) = tc.get("function") {
+                                    if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                                        acc_tool_calls[idx].name = Some(name.to_string());
+                                    }
+                                    if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                        acc_tool_calls[idx].arguments.push_str(args);
+                                    }
+                                }
+                            }
+                        }
+                    }
+            }
+            ApiFormat::OllamaNative => {
+                let message = &parsed["message"];
+                if let Some(content) = message.get("content").and_then(|v| v.as_str()) {
+                    full_text.push_str(content);
+                    if let Some(tx) = stream_tx {
+                        let _ = tx.send(content.to_string());
+                    }
+                }
+
+                if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tool_calls {
+                        let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                        let args_val = &tc["function"]["arguments"];
+                        let args_str = if args_val.is_string() {
+                            args_val.as_str().unwrap_or("").to_string()
+                        } else {
+                            args_val.to_string()
+                        };
+                        let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        
+                        acc_tool_calls.push(AccumulatedToolCall {
+                            id: Some(id),
+                            name: Some(name),
+                            arguments: args_str,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+}
+
+#[derive(Default, Clone)]
+struct AccumulatedToolCall {
+    id: Option<String>,
+    name: Option<String>,
+    arguments: String,
 }
 
 #[async_trait]
@@ -276,11 +389,8 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         let endpoint = self.endpoint(&provider.base_url, format);
         let api_key = provider.api_key.as_deref();
 
-        // Always use non-streaming. Streaming APIs return NDJSON/SSE which is
-        // format-specific and fragile to parse mid-stream when the model may
-        // return either text or tool calls. Instead we receive the complete
-        // response and replay text tokens through the channel for the REPL.
-        let payload = self.build_payload(system_prompt, messages, tools, format, false);
+        let streaming = stream_tx.is_some();
+        let payload = self.build_payload(system_prompt, messages, tools, format, streaming);
 
         let mut req = self.client.post(&endpoint).json(&payload);
         if let Some(key) = api_key {
@@ -299,24 +409,87 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
             let _ = tx.send("\x03".to_string());
         }
 
-        let resp: Value = resp_res?.json().await?;
-        tracing::debug!(response = %resp, "Raw model response");
-
-        let model_response = self.parse_response(&resp, format)?;
-
-        // Replay text through the streaming channel so the REPL gets a
-        // typewriter effect without requiring real SSE parsing.
-        if let (ModelResponse::EndTurn(text), Some(tx)) = (&model_response, stream_tx) {
-            // Split on whitespace boundaries to send word-sized chunks.
-            // split_inclusive keeps the delimiter (space/newline) with the preceding word.
-            for chunk in text.split_inclusive(|c: char| c.is_whitespace()) {
-                if tx.send(chunk.to_string()).is_err() {
-                    break; // receiver dropped (Ctrl-C)
-                }
-            }
+        let resp_val = resp_res?;
+        if !resp_val.status().is_success() {
+            let status = resp_val.status();
+            let body = resp_val.text().await.unwrap_or_default();
+            anyhow::bail!("API returned error status {}: {}", status, body);
         }
 
-        Ok(model_response)
+        if streaming {
+            let mut stream = resp_val.bytes_stream();
+            let mut full_text = String::new();
+            let mut acc_tool_calls: Vec<AccumulatedToolCall> = Vec::new();
+            let mut line_buf = Vec::new();
+
+            while let Some(chunk_res) = stream.next().await {
+                let chunk = chunk_res?;
+                for &byte in chunk.iter() {
+                    if byte == b'\n' {
+                        let line = String::from_utf8_lossy(&line_buf).to_string();
+                        line_buf.clear();
+                        if !line.trim().is_empty() {
+                            self.process_stream_line(&line, format, &mut full_text, &mut acc_tool_calls, &stream_tx)?;
+                        }
+                    } else {
+                        line_buf.push(byte);
+                    }
+                }
+            }
+            if !line_buf.is_empty() {
+                let line = String::from_utf8_lossy(&line_buf).to_string();
+                if !line.trim().is_empty() {
+                    self.process_stream_line(&line, format, &mut full_text, &mut acc_tool_calls, &stream_tx)?;
+                }
+            }
+
+            if !acc_tool_calls.is_empty() {
+                let mut calls = Vec::new();
+                for (idx, atc) in acc_tool_calls.into_iter().enumerate() {
+                    let name = atc.name.unwrap_or_default();
+                    let id = atc.id.unwrap_or_else(|| format!("call_{}", idx));
+                    let args_str = atc.arguments.trim();
+                    let args = if args_str.is_empty() {
+                        json!({})
+                    } else {
+                        match serde_json::from_str::<Value>(args_str) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return Ok(ModelResponse::ParseError {
+                                    raw_text: args_str.to_string(),
+                                    error: format!("Failed to parse tool args: {}", e),
+                                });
+                            }
+                        }
+                    };
+                    calls.push(ToolCall { id, name, args });
+                }
+                Ok(ModelResponse::ToolCalls(calls))
+            } else {
+                if let Some(resp) = self.try_parse_markdown_tool_call(&full_text) {
+                    return Ok(resp);
+                }
+                Ok(ModelResponse::EndTurn(full_text))
+            }
+        } else {
+            let resp: Value = resp_val.json().await?;
+            tracing::debug!(response = %resp, "Raw model response");
+            let model_response = self.parse_response(&resp, format)?;
+
+            // Replay text through the streaming channel so the REPL gets a
+            // typewriter effect without requiring real SSE parsing.
+            if let (ModelResponse::EndTurn(text), Some(tx)) = (&model_response, stream_tx) {
+                // Split on whitespace boundaries to send word-sized chunks.
+                // split_inclusive keeps the delimiter (space/newline) with the preceding word.
+                for chunk in text.split_inclusive(|c: char| c.is_whitespace()) {
+                    if tx.send(chunk.to_string()).is_err() {
+                        break; // receiver dropped (Ctrl-C)
+                    }
+                }
+            }
+
+            Ok(model_response)
+        }
     }
 
     fn provider_name(&self) -> &str { &self.config.active_provider }
