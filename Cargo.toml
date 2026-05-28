@@ -40,11 +40,5 @@ openblas-src = { version = "0.10", features = ["system"], default-features = fal
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.10", features = ["accelerate"] }
 
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
-rand = "0.8"
 
-[[bench]]
-name = "memory_bench"
-harness = false
 

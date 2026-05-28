@@ -1,8 +1,0 @@
-{
-  "id": "001_list_dir",
-  "description": "Agent must list the current directory",
-  "prompt": "List all the files and directories in the current working directory.",
-  "expected_tools": ["list_dir"],
-  "max_iterations": 3,
-  "timeout_ms": 30000
-}

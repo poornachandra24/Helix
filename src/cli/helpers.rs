@@ -32,7 +32,7 @@ pub fn print_banner(
     ];
 
     println!();
-    // Print logo side-by-side with evolution status indicators
+    // Print logo side-by-side with retrieval tuning indicators
     let neural_status = if patterns_count > 0 {
         format!("{} patterns adapted", patterns_count).green().bold().to_string()
     } else {

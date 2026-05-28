@@ -1,8 +1,0 @@
-{
-  "id": "002_read_cargo_toml",
-  "description": "Agent must read Cargo.toml and report the package name",
-  "prompt": "What is the package name defined in Cargo.toml?",
-  "expected_tools": ["read_file"],
-  "max_iterations": 3,
-  "timeout_ms": 30000
-}

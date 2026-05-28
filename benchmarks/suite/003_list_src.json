@@ -1,8 +1,0 @@
-{
-  "id": "003_list_src",
-  "description": "Agent must list the src/ directory",
-  "prompt": "How many Rust source files are in the src/ directory? List them.",
-  "expected_tools": ["list_dir"],
-  "max_iterations": 3,
-  "timeout_ms": 30000
-}

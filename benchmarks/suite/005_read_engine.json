@@ -1,8 +1,0 @@
-{
-  "id": "005_read_engine",
-  "description": "Agent reads a specific internal source file",
-  "prompt": "Read the file src/engine.rs and tell me what the max_iterations limit is set to.",
-  "expected_tools": ["read_file"],
-  "max_iterations": 3,
-  "timeout_ms": 30000
-}
