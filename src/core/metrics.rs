@@ -141,3 +141,49 @@ impl TurnTimer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metrics_collector_summary() {
+        let mut collector = MetricsCollector::new("test_session");
+        
+        collector.record(TurnMetrics {
+            turn_index: 0,
+            prompt_chars: 10,
+            duration_ms: 100,
+            agent_steps: 2,
+            tool_calls: 3,
+            healer_retries: 1,
+            compaction_fired: true,
+            ended_with_error: false,
+            timestamp: "2026-06-01T00:00:00Z".to_string(),
+        });
+
+        collector.record(TurnMetrics {
+            turn_index: 1,
+            prompt_chars: 20,
+            duration_ms: 200,
+            agent_steps: 4,
+            tool_calls: 5,
+            healer_retries: 0,
+            compaction_fired: false,
+            ended_with_error: true,
+            timestamp: "2026-06-01T00:01:00Z".to_string(),
+        });
+
+        let summary = collector.summary();
+        assert_eq!(summary.session_id, "test_session");
+        assert_eq!(summary.turn_count, 2);
+        assert_eq!(summary.avg_duration_ms, 150.0);
+        assert_eq!(summary.avg_agent_steps, 3.0);
+        assert_eq!(summary.total_tool_calls, 8);
+        assert_eq!(summary.total_healer_retries, 1);
+        // 1 compaction out of 2 turns = 5.0 per 10 turns
+        assert_eq!(summary.compaction_rate_per_10, 5.0);
+        // 1 error out of 2 turns = 0.5 error rate
+        assert_eq!(summary.error_rate, 0.5);
+    }
+}

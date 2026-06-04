@@ -60,6 +60,9 @@ pub struct AppConfig {
     /// Sandbox mode for tool execution.
     #[serde(default)]
     pub sandbox_mode: SandboxMode,
+    /// Optional user-defined thinking level for reasoning models.
+    #[serde(default)]
+    pub thinking_level: Option<String>,
 }
 
 
@@ -81,16 +84,14 @@ impl AppConfig {
                 if check_provider_health(client, p).await {
                     return p.clone();
                 } else {
-                    tracing::warn!("Active provider '{}' is offline. Failover activated...", p.name);
+                    tracing::warn!("Active provider '{}' is offline. Proceeding anyway...", p.name);
+                    return p.clone();
                 }
             }
 
-        // 2. Either active_provider is "auto" or it is offline. Probe all configured providers.
+        // 2. We are in "auto" mode. Probe all configured providers to find the best online candidate.
         let mut candidates = Vec::new();
         for p in &self.providers {
-            if self.active_provider != "auto" && p.name == self.active_provider {
-                continue;
-            }
             tracing::info!("Probing candidate '{}' ({})", p.name, p.base_url);
             if check_provider_health(client, p).await {
                 candidates.push(p.clone());
@@ -255,6 +256,7 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
         context_window_override: None,
         response_headroom: None,
         sandbox_mode: SandboxMode::Local,
+        thinking_level: None,
     });
 
     config.providers.retain(|p| p.name != provider.name);

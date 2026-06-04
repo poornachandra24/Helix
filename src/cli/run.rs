@@ -16,11 +16,11 @@ use super::helpers::{
 };
 
 pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()> {
-    let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
-    let mut tools = build_tool_registry(sandbox);
-    let _mcp_registry = init_mcp_tools(&mut tools).await?;
     let data_dir = config::get_data_dir()?;
     let skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
+    let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
+    let mut tools = build_tool_registry(sandbox, data_dir.join("skills"));
+    let _mcp_registry = init_mcp_tools(&mut tools).await?;
     let memory_dir = data_dir.join("memory");
     let memory_engine = memory::HelixMemoryEngine::new(&memory_dir)?;
 

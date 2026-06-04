@@ -163,13 +163,15 @@ pub fn build_system_prompt(base: &str, skill_reg: &skills::SkillRegistry) -> Str
     format!("{}{}", base, skills_suffix)
 }
 
-pub fn build_tool_registry(sandbox: sandbox::SharedSandbox) -> tools::ToolRegistry {
+pub fn build_tool_registry(sandbox: sandbox::SharedSandbox, skills_dir: std::path::PathBuf) -> tools::ToolRegistry {
     let mut registry = tools::ToolRegistry::new();
     registry.register(builtins::BashTool::new(sandbox.clone()));
     registry.register(builtins::ReadFileTool::new(sandbox.clone()));
     registry.register(builtins::WriteFileTool::new(sandbox.clone()));
     registry.register(builtins::ListDirTool::new(sandbox.clone()));
+    registry.register(builtins::WasmExecuteTool::new(sandbox.clone()));
     registry.register(builtins::WebFetchTool::new());
+    registry.register(builtins::AddSkillTool::new(skills_dir));
     registry
 }
 
@@ -398,4 +400,60 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
             }
         })
         .collect()
+}
+
+pub fn confirm_agent_action(tool_name: &str, description: &str, details: Option<&str>) -> Result<bool> {
+    use comfy_table::{Table, Cell, Color, Attribute, ColumnConstraint, Width};
+    use comfy_table::presets::UTF8_BORDERS_ONLY;
+    use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+    use dialoguer::Confirm;
+    use console::style;
+
+    println!();
+    let mut table = Table::new();
+    table.load_preset(UTF8_BORDERS_ONLY);
+    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_width(70);
+    table.set_constraints(vec![
+        ColumnConstraint::Absolute(Width::Fixed(18)),
+        ColumnConstraint::Absolute(Width::Fixed(48)),
+    ]);
+
+    // Header row
+    let header_title = format!("⚠️   AGENT REQUEST: {}", tool_name.to_uppercase());
+    table.add_row(vec![
+        Cell::new(&header_title)
+            .fg(Color::Yellow)
+            .add_attribute(Attribute::Bold),
+        Cell::new("PENDING USER APPROVAL")
+            .fg(Color::DarkYellow)
+            .add_attribute(Attribute::Bold)
+            .set_alignment(comfy_table::CellAlignment::Right),
+    ]);
+
+    table.add_row(vec![
+        Cell::new("──────────────────").fg(Color::DarkGrey),
+        Cell::new("────────────────────────────────────────────────").fg(Color::DarkGrey),
+    ]);
+
+    table.add_row(vec![
+        Cell::new("Action Details").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new(description).fg(Color::White),
+    ]);
+
+    if let Some(det) = details {
+        table.add_row(vec![
+            Cell::new("Target/Payload").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new(det).fg(Color::Cyan),
+        ]);
+    }
+
+    println!("{table}");
+
+    let allowed = Confirm::new()
+        .with_prompt(style("Authorize action?").bold().to_string())
+        .default(false)
+        .interact()?;
+
+    Ok(allowed)
 }

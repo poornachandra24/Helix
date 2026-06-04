@@ -54,6 +54,7 @@ pub trait ModelAdapter: Send + Sync {
 
     fn provider_name(&self) -> &str;
     fn model_name(&self) -> &str;
+    fn set_thinking_level(&self, _level: Option<String>) {}
 }
 
 // ──────────────────────────────────────────────
@@ -64,14 +65,17 @@ pub struct OpenAiCompatibleAdapter {
     pub config: AppConfig,
     client: Client,
     resolved_provider: tokio::sync::Mutex<Option<Provider>>,
+    thinking_level: std::sync::RwLock<Option<String>>,
 }
 
 impl OpenAiCompatibleAdapter {
     pub fn new(config: AppConfig) -> Self {
+        let level = config.thinking_level.clone();
         Self {
             config,
             client: Client::new(),
             resolved_provider: tokio::sync::Mutex::new(None),
+            thinking_level: std::sync::RwLock::new(level),
         }
     }
 
@@ -118,13 +122,37 @@ impl OpenAiCompatibleAdapter {
                     }
                 })).collect();
 
-                json!({
+                let mut payload = json!({
                     "model":       self.config.active_model,
                     "messages":    msgs,
                     "tools":       openai_tools,
                     "temperature": 0.1,
                     "stream":      streaming,
-                })
+                });
+
+                let active_level = self.thinking_level.read().ok().and_then(|r| r.clone());
+                if let Some(level) = &active_level {
+                    let level_lower = level.to_lowercase();
+                    if level_lower == "off" || level_lower == "disabled" {
+                        payload["reasoning_effort"] = json!("low");
+                        payload["thinking_config"] = json!({ "thinking_budget": 0 });
+                    } else if level_lower == "low" {
+                        payload["reasoning_effort"] = json!("low");
+                        payload["thinking_config"] = json!({ "thinking_budget": 1024 });
+                    } else if level_lower == "medium" {
+                        payload["reasoning_effort"] = json!("medium");
+                        payload["thinking_config"] = json!({ "thinking_budget": 4096 });
+                    } else if level_lower == "high" {
+                        payload["reasoning_effort"] = json!("high");
+                        payload["thinking_config"] = json!({ "thinking_budget": 16384 });
+                    } else if let Ok(budget) = level.parse::<u64>() {
+                        payload["thinking_config"] = json!({ "thinking_budget": budget });
+                        let effort = if budget < 2048 { "low" } else if budget < 8192 { "medium" } else { "high" };
+                        payload["reasoning_effort"] = json!(effort);
+                    }
+                }
+
+                payload
             }
             ApiFormat::OllamaNative => {
                 let mut msgs = vec![json!({"role": "system", "content": system_prompt})];
@@ -152,13 +180,33 @@ impl OpenAiCompatibleAdapter {
                     }
                 })).collect();
 
-                json!({
+                let mut payload = json!({
                     "model":    self.config.active_model,
                     "messages": msgs,
                     "tools":    ollama_tools,
                     "stream":   streaming,
                     "options":  { "temperature": 0.1 },
-                })
+                });
+
+                let active_level = self.thinking_level.read().ok().and_then(|r| r.clone());
+                if let Some(level) = &active_level {
+                    if let Some(opts) = payload["options"].as_object_mut() {
+                        let level_lower = level.to_lowercase();
+                        if level_lower == "off" || level_lower == "disabled" {
+                            opts.insert("thinking_budget".to_string(), json!(0));
+                        } else if level_lower == "low" {
+                            opts.insert("thinking_budget".to_string(), json!(1024));
+                        } else if level_lower == "medium" {
+                            opts.insert("thinking_budget".to_string(), json!(4096));
+                        } else if level_lower == "high" {
+                            opts.insert("thinking_budget".to_string(), json!(16384));
+                        } else if let Ok(budget) = level.parse::<u64>() {
+                            opts.insert("thinking_budget".to_string(), json!(budget));
+                        }
+                    }
+                }
+
+                payload
             }
         }
     }
@@ -494,4 +542,9 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
 
     fn provider_name(&self) -> &str { &self.config.active_provider }
     fn model_name(&self)    -> &str { &self.config.active_model }
+    fn set_thinking_level(&self, level: Option<String>) {
+        if let Ok(mut w) = self.thinking_level.write() {
+            *w = level;
+        }
+    }
 }

@@ -4,6 +4,7 @@ use unicode_width::UnicodeWidthStr;
 use owo_colors::OwoColorize;
 use std::io::{self, Write};
 use tokio::sync::mpsc;
+use tokio::io::AsyncBufReadExt;
 
 use crate::config;
 use crate::core::context;
@@ -52,6 +53,7 @@ fn print_help() {
         ("/sessions", "list previous chat sessions"),
         ("/resume <id>", "load a past session into the active context"),
         ("/memory [query]", "search/manage semantic memory (use --clear to wipe)"),
+        ("/thinking [level]", "set or show reasoning effort/budget (low, medium, high, off, or tokens)"),
         ("/exit | /quit", "exit the REPL session"),
     ];
     for (cmd, desc) in general {
@@ -67,13 +69,13 @@ fn print_help() {
 pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
     // Banner is printed after engine is built so we can pass session/memory/SONA info
 
-    let session = persistence::Session::new(None)?;
-    let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
-    let mut tools = build_tool_registry(sandbox.clone());
-    let _mcp_registry = init_mcp_tools(&mut tools).await?;
     let data_dir = config::get_data_dir()?;
     let skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
     let active_skills = skill_reg.list_skills();
+    let session = persistence::Session::new(None)?;
+    let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
+    let mut tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
+    let _mcp_registry = init_mcp_tools(&mut tools).await?;
     let memory_dir = data_dir.join("memory");
     let memory_engine = memory::HelixMemoryEngine::new(&memory_dir)?;
 
@@ -114,12 +116,38 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
     let patterns_count = engine.sona.as_ref().map(|s| s.stats().patterns_stored).unwrap_or(0);
     print_banner(&app_config, &engine.session.id, memory_size, patterns_count, engine.context.budget.model_window, &active_skills);
 
+    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+
     loop {
-        print!("\n{} ", style(">").bold().blue());
+        let msg_tokens: usize = engine.global_messages.iter().map(context::TokenEstimator::estimate_message).sum();
+        let budget = &engine.context.budget;
+        let total_used = msg_tokens + budget.system_prompt_tokens + budget.tool_descriptor_tokens;
+        let pct = (total_used as f64 / budget.model_window as f64) * 100.0;
+        
+        let pct_color = if pct > 85.0 {
+            style(format!("{:.1}%", pct)).red().bold()
+        } else if pct > 70.0 {
+            style(format!("{:.1}%", pct)).yellow().bold()
+        } else {
+            style(format!("{:.1}%", pct)).color256(150)
+        };
+        
+        print!("\n{} {} ", style(format!("[Ctx: {}]", pct_color)).dimmed(), style(">").bold().blue());
         io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        tokio::select! {
+            res = reader.read_line(&mut input) => {
+                let bytes_read = res?;
+                if bytes_read == 0 {
+                    break;
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                println!();
+                break;
+            }
+        }
         let trimmed = input.trim();
 
         match trimmed {
@@ -303,17 +331,55 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
         // ── /use <name> [model] ───────────────────────────────
         if let Some(rest) = trimmed.strip_prefix("/use ") {
-            let mut parts = rest.splitn(2, ' ');
-            let name  = parts.next().unwrap_or("").trim();
-            let model_override = parts.next().map(str::trim);
-            match config::switch_provider(&mut app_config, name, model_override) {
-                Ok(()) => {
-                    sandbox.set_mode(app_config.sandbox_mode);
-                    let new_context = build_context(&app_config, &system_prompt, &engine.tools.descriptors(), &lookup_client).await;
-                    engine.update_model(build_model(&app_config), new_context);
-                    println!("{}", style(format!("✔ Using {} / {}", app_config.active_provider, app_config.active_model)).green());
+            let rest = rest.trim();
+            let mut matched_provider = None;
+
+            // Build candidate names including "auto", sorted by length descending
+            let mut provider_names = vec!["auto".to_string()];
+            provider_names.extend(app_config.providers.iter().map(|p| p.name.clone()));
+            provider_names.sort_by_key(|b| std::cmp::Reverse(b.len()));
+
+            for cand in provider_names {
+                let cand_len = cand.len();
+                if rest.len() >= cand_len && rest[..cand_len].eq_ignore_ascii_case(&cand) {
+                    if rest.len() == cand_len {
+                        matched_provider = Some((cand, None));
+                        break;
+                    } else if rest.as_bytes()[cand_len] == b' ' {
+                        let model = rest[cand_len..].trim();
+                        let model_opt = if model.is_empty() { None } else { Some(model.to_string()) };
+                        matched_provider = Some((cand, model_opt));
+                        break;
+                    }
                 }
-                Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
+            }
+
+            if let Some((provider_name, model_override)) = matched_provider {
+                match config::switch_provider(&mut app_config, &provider_name, model_override.as_deref()) {
+                    Ok(()) => {
+                        sandbox.set_mode(app_config.sandbox_mode);
+                        let new_context = build_context(&app_config, &system_prompt, &engine.tools.descriptors(), &lookup_client).await;
+                        engine.update_model(build_model(&app_config), new_context);
+                        println!("{}", style(format!("✔ Switched to {} / {}", app_config.active_provider, app_config.active_model)).green());
+                    }
+                    Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
+                }
+            } else {
+                // Treat the entire string as a model override for the active provider
+                if !rest.is_empty() {
+                    let active_p = app_config.active_provider.clone();
+                    match config::switch_provider(&mut app_config, &active_p, Some(rest)) {
+                        Ok(()) => {
+                            sandbox.set_mode(app_config.sandbox_mode);
+                            let new_context = build_context(&app_config, &system_prompt, &engine.tools.descriptors(), &lookup_client).await;
+                            engine.update_model(build_model(&app_config), new_context);
+                            println!("{}", style(format!("✔ Switched model to '{}' on active provider '{}'", app_config.active_model, app_config.active_provider)).green());
+                        }
+                        Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
+                    }
+                } else {
+                    println!("{}", style("✘ Usage: /use <provider> [model] OR /use <model>").red());
+                }
             }
             continue;
         }
@@ -382,6 +448,42 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             continue;
         }
 
+        // ── /thinking [level] ──────────────────────────────────
+        if trimmed == "/thinking" || trimmed.starts_with("/thinking ") {
+            let arg = trimmed.strip_prefix("/thinking").unwrap_or("").trim();
+            if arg.is_empty() {
+                let current = app_config.thinking_level.as_deref().unwrap_or("default");
+                println!("{}", style(format!("Current thinking level: {}", current)).cyan());
+            } else {
+                let level = match arg.to_lowercase().as_str() {
+                    "low" | "medium" | "high" | "off" | "disabled" => {
+                        if arg.to_lowercase() == "off" || arg.to_lowercase() == "disabled" {
+                            Some("off".to_string())
+                        } else {
+                            Some(arg.to_lowercase())
+                        }
+                    }
+                    other => {
+                        if other.parse::<u64>().is_ok() {
+                            Some(arg.to_string())
+                        } else {
+                            println!("{}", style("✘ Invalid level. Allowed: low, medium, high, off, disabled, or an integer budget (e.g., 2048)").red());
+                            continue;
+                        }
+                    }
+                };
+
+                app_config.thinking_level = level.clone();
+                let _ = app_config.save();
+                
+                // Hot update the adapter config as well!
+                engine.model.set_thinking_level(level.clone());
+
+                let desc = level.as_deref().unwrap_or("default");
+                println!("{}", style(format!("✔ Thinking level set to: {}", desc)).green());
+            }
+            continue;
+        }
 
         if trimmed.is_empty() { continue; }
 
@@ -432,7 +534,9 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             let spinner_style_fn = |s: &str| s.cyan().bold().to_string();
 
             let start_time = std::time::Instant::now();
-            let mut stream_printer = BoxedStreamPrinter::new(content_width);
+            let mut full_response = String::new();
+            let mut telemetry_messages = Vec::new();
+            let mut stream_tracker = StreamTracker::new(content_width);
 
             loop {
                 tokio::select! {
@@ -449,27 +553,19 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                                     show_spinner = false;
                                 } else if token == "\x04" {
                                     show_spinner = false;
-                                    stream_printer.finish(&format!("Elapsed: {:.2}s", start_time.elapsed().as_secs_f32()));
                                 } else if token.starts_with("\x1b[S") {
                                     spinner_suffix = token.strip_prefix("\x1b[S").unwrap_or("thinking...").to_string();
                                 } else if token.starts_with("\x1b[T") {
+                                    let msg = token.strip_prefix("\x1b[T").unwrap_or("").to_string();
+                                    telemetry_messages.push(msg);
+                                } else {
                                     if show_spinner {
                                         print!("\r\x1B[K");
                                         io::stdout().flush().ok();
+                                        show_spinner = false;
                                     }
-                                    let msg = token.strip_prefix("\x1b[T").unwrap_or("");
-                                    if stream_printer.started {
-                                        stream_printer.flush_current_line();
-                                    }
-                                    print!("\r\x1B[K");
-                                    println!("{}", msg);
-                                    if stream_printer.started {
-                                        print!("  {}  {}", stream_printer.pipe, stream_printer.current_line);
-                                    }
-                                    io::stdout().flush().ok();
-                                } else {
-                                    show_spinner = false;
-                                    stream_printer.print_token(&token);
+                                    stream_tracker.print_token(&token);
+                                    full_response.push_str(&token);
                                 }
                             }
                             None => {
@@ -492,17 +588,55 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             print!("\r\x1B[K");
             io::stdout().flush().ok();
 
-            if stream_printer.started {
-                let elapsed = start_time.elapsed().as_secs_f32();
-                let elapsed_str = format!(" [Elapsed: {:.2}s] ", elapsed);
-                stream_printer.finish(&elapsed_str);
+            // Finish the stream tracker
+            stream_tracker.finish();
+
+            let elapsed = start_time.elapsed().as_secs_f32();
+            let elapsed_str = format!(" [Elapsed: {:.2}s] ", elapsed);
+
+            let term_height = console::Term::stdout().size_checked().map(|(h, _)| h as usize).unwrap_or(24);
+            let is_short_enough = stream_tracker.printed_lines < term_height.saturating_sub(4);
+
+            if stream_tracker.printed_lines > 0 && is_short_enough {
+                // Erase the live-streamed text box to replace it with formatted markdown
+                print!("\x1B[{}A", stream_tracker.printed_lines);
+                print!("\x1B[J");
+                io::stdout().flush().ok();
+                print_boxed_response(content_width, &full_response, &elapsed_str);
+            } else {
+                // Either no lines were printed, or the response was too long and scrolled.
+                // In the latter case, we do not erase (to avoid leaving orphaned lines in scrollback).
+                // Instead, we just print the bottom border of the streamed box.
+                let l_len = elapsed_str.len();
+                let dashes = (content_width + 4).saturating_sub(l_len);
+                let left_dashes = dashes / 2;
+                let right_dashes = dashes - left_dashes;
+                
+                let border_color_fn = |s: &str| s.yellow().to_string();
+                let header_color_fn = |s: &str| s.yellow().bold().to_string();
+                
+                let bottom = format!(
+                    "  {}{}{}{}{}",
+                    border_color_fn("╰"),
+                    border_color_fn(&"─".repeat(left_dashes)),
+                    header_color_fn(&elapsed_str),
+                    border_color_fn(&"─".repeat(right_dashes)),
+                    border_color_fn("╯")
+                );
+                println!("{}", bottom);
+                std::io::stdout().flush().ok();
+            }
+
+            // Print telemetry footnotes
+            for msg in telemetry_messages {
+                println!("{}", msg);
             }
             io::stdout().flush().ok();
         });
 
         tokio::select! {
             res = engine.run_turn(&system_prompt, trimmed, Some(tx)) => {
-                printer.await.ok(); // flush remaining tokens
+                printer.await.ok(); // wait for printer task to finish rendering
                 match res {
                     Ok(final_text) => {
                         if final_text.is_empty() {
@@ -517,6 +651,35 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                 println!("\n{}", "[⛔ Request cancelled]".red().bold());
             }
         }
+
+        // Print live context utilization bar
+        let msg_tokens: usize = engine.global_messages.iter().map(context::TokenEstimator::estimate_message).sum();
+        let budget = &engine.context.budget;
+        let total_used = msg_tokens + budget.system_prompt_tokens + budget.tool_descriptor_tokens;
+        let pct = (total_used as f64 / budget.model_window as f64) * 100.0;
+        
+        let width = 25;
+        let filled = ((pct / 100.0) * width as f64).round() as usize;
+        let filled = filled.min(width);
+        let empty = width - filled;
+        
+        let bar_color = if pct > 85.0 {
+            style("█".repeat(filled)).red()
+        } else if pct > 70.0 {
+            style("█".repeat(filled)).yellow()
+        } else {
+            style("█".repeat(filled)).color256(150)
+        };
+        let bar = format!("{}{}", bar_color, style("░".repeat(empty)).color256(239));
+        
+        println!(
+            "  {} [{}] {}/{} tokens ({:.1}% used)\n",
+            style("Context:").dimmed(),
+            bar,
+            total_used,
+            budget.model_window,
+            pct
+        );
 
         // Flush metrics to disk after every turn so /evolve can see them immediately
         if let Some(m) = &engine.metrics
@@ -546,18 +709,61 @@ fn model_registry_build_lookup_client() -> reqwest::Client {
     crate::model::registry::build_lookup_client()
 }
 
-struct BoxedStreamPrinter {
+fn print_boxed_response(content_width: usize, full_response: &str, elapsed_str: &str) {
+    let title = "Helix";
+    let border_color_fn = |s: &str| s.yellow().to_string();
+    let header_color_fn = |s: &str| s.yellow().bold().to_string();
+    let dashes_count = content_width.saturating_sub(title.len());
+    print!("  ");
+    print!("{}", border_color_fn("╭── "));
+    print!("{}", header_color_fn(title));
+    println!("{}", border_color_fn(&format!(" {}╮", "─".repeat(dashes_count))));
+
+    let pipe = "│".yellow().to_string();
+    
+    // Render using termimad with default skin
+    let skin = termimad::MadSkin::default();
+    let fmt_text = termimad::FmtText::from_text(&skin, full_response.into(), Some(content_width));
+    let rendered_str = fmt_text.to_string();
+
+    for line in rendered_str.lines() {
+        let clean_line = console::strip_ansi_codes(line);
+        let display_width = clean_line.width();
+        let pad = content_width.saturating_sub(display_width);
+        println!("  {}  {}{}  {}", pipe, line, " ".repeat(pad), pipe);
+    }
+
+    // Print bottom border
+    let l_len = elapsed_str.len();
+    let dashes = (content_width + 4).saturating_sub(l_len);
+    let left_dashes = dashes / 2;
+    let right_dashes = dashes - left_dashes;
+    let bottom = format!(
+        "  {}{}{}{}{}",
+        border_color_fn("╰"),
+        border_color_fn(&"─".repeat(left_dashes)),
+        header_color_fn(elapsed_str),
+        border_color_fn(&"─".repeat(right_dashes)),
+        border_color_fn("╯")
+    );
+    println!("{}", bottom);
+    std::io::stdout().flush().ok();
+}
+
+struct StreamTracker {
     content_width: usize,
     current_line: String,
+    printed_lines: usize,
     started: bool,
     pipe: String,
 }
 
-impl BoxedStreamPrinter {
+impl StreamTracker {
     fn new(content_width: usize) -> Self {
         Self {
             content_width,
             current_line: String::new(),
+            printed_lines: 0,
             started: false,
             pipe: "│".yellow().to_string(),
         }
@@ -574,7 +780,8 @@ impl BoxedStreamPrinter {
         print!("{}", header_color_fn(title));
         println!("{}", border_color_fn(&format!(" {}╮", "─".repeat(dashes_count))));
         
-        // Print the first incomplete line left border
+        self.printed_lines += 1;
+        
         print!("  {}  ", self.pipe);
         std::io::stdout().flush().ok();
         self.started = true;
@@ -585,17 +792,14 @@ impl BoxedStreamPrinter {
             self.start();
         }
 
-        // We split the token by newlines to handle explicit newlines.
         let parts: Vec<&str> = token.split('\n').collect();
         for (i, part) in parts.iter().enumerate() {
             if i > 0 {
-                // We encountered a newline. Finish the current line.
                 self.flush_current_line();
             }
 
             self.current_line.push_str(part);
             
-            // Check if current line exceeds width
             while self.current_line.width() > self.content_width {
                 let mut last_space_idx = None;
                 let chars: Vec<char> = self.current_line.chars().collect();
@@ -621,66 +825,38 @@ impl BoxedStreamPrinter {
 
                 let fit: String = chars[..split_idx].iter().collect();
                 let rem: String = chars[split_idx..].iter().collect();
-                let fit_width = fit.width();
                 
-                // Clear the active printed line
                 print!("\r\x1B[K");
-                
-                // Print completed line
-                let pad = self.content_width.saturating_sub(fit_width);
-                println!("  {}  {}{}  {}", self.pipe, fit, " ".repeat(pad), self.pipe);
+                println!("  {}  {}", self.pipe, fit);
+                self.printed_lines += 1;
                 
                 self.current_line = rem;
-                
-                // Print the left border for the next line
                 print!("  {}  ", self.pipe);
             }
         }
 
-        // Reprint the current active line
         print!("\r\x1B[K");
         print!("  {}  {}", self.pipe, self.current_line);
         std::io::stdout().flush().ok();
     }
 
     fn flush_current_line(&mut self) {
-        // Clear active line
         print!("\r\x1B[K");
-        let pad = self.content_width.saturating_sub(self.current_line.width());
-        println!("  {}  {}{}  {}", self.pipe, self.current_line, " ".repeat(pad), self.pipe);
+        println!("  {}  {}", self.pipe, self.current_line);
+        self.printed_lines += 1;
         self.current_line.clear();
         print!("  {}  ", self.pipe);
         std::io::stdout().flush().ok();
     }
 
-    fn finish(&mut self, elapsed_str: &str) {
+    fn finish(&mut self) {
         if !self.started {
             return;
         }
-        
-        // Flush the last line
         print!("\r\x1B[K");
-        let pad = self.content_width.saturating_sub(self.current_line.width());
-        println!("  {}  {}{}  {}", self.pipe, self.current_line, " ".repeat(pad), self.pipe);
-        
-        // Print bottom border
-        let border_color_fn = |s: &str| s.yellow().to_string();
-        let header_color_fn = |s: &str| s.yellow().bold().to_string();
-        
-        let l_len = elapsed_str.len();
-        let dashes = (self.content_width + 4).saturating_sub(l_len);
-        let left_dashes = dashes / 2;
-        let right_dashes = dashes - left_dashes;
-        let bottom = format!(
-            "  {}{}{}{}{}",
-            border_color_fn("╰"),
-            border_color_fn(&"─".repeat(left_dashes)),
-            header_color_fn(elapsed_str),
-            border_color_fn(&"─".repeat(right_dashes)),
-            border_color_fn("╯")
-        );
-        println!("{}", bottom);
-        self.started = false;
+        println!("  {}  {}", self.pipe, self.current_line);
+        self.printed_lines += 1;
+        self.current_line.clear();
         std::io::stdout().flush().ok();
     }
 }

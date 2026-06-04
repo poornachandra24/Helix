@@ -2,6 +2,15 @@
 name = "helix"
 version = "0.1.0"
 edition = "2024"
+authors = ["Poornachandra <poornachandra24@users.noreply.github.com>"]
+description = "A tiny, self-evolving autonomous AI agent harness"
+license = "MIT"
+repository = "https://github.com/poornachandra24/helix"
+homepage = "https://github.com/poornachandra24/helix"
+readme = "README.md"
+categories = ["development-tools", "science::artificial-intelligence"]
+keywords = ["agent", "cli", "ai", "self-evolving", "rust"]
+
 
 [dependencies]
 anyhow = "1.0.102"
@@ -32,6 +41,8 @@ rusqlite = { version = "0.31.0", features = ["bundled"] }
 rmcp = { version = "1.7.0", features = ["client", "transport-child-process"] }
 ruvllm = "2.2.1"
 ruvector-sona = { version = "0.2.0", features = ["serde-support"] }
+tiktoken-rs = "0.6.0"
+wasmi = "0.31.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 blas-src = { version = "0.10", features = ["openblas"] }

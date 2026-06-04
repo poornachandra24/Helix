@@ -21,3 +21,17 @@ Welcome to the Helix developer documentation. This directory contains detailed a
 4.  **[Skill Registry Subsystem](skills.md)**
     *   Details the scanning and loading of modular `.md` and `.txt` instruction files from the user configuration folder.
     *   Explains how domain-specific behaviors are dynamically injected into the system prompt context.
+
+## Guides & Deployment
+
+5.  **[Core Architecture Overview](architecture.md)**
+    *   An in-depth map of orchestration loops, self-healing parser mechanisms, exact context budgeting, and container sandboxing models.
+
+6.  **[Plugin & Extension Development](plugin_development.md)**
+    *   A guide on building custom native Rust tools, configuring external MCP servers, and writing natural-language Markdown skills.
+
+7.  **[Deployment Guide](edge_deployment.md)**
+    *   Instructions for native host setups, stateful container sandboxes with resource limits, and permissionless guest VM WASM runs.
+
+8.  **[Versioning & Contribution Guide](contributing.md)**
+    *   Guidelines on semantic versioning, distribution pipelines, user installation commands, and developer pull request lifecycle checklists.

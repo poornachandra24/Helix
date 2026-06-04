@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use crate::tools::ToolDescriptor;
+use tiktoken_rs::cl100k_base;
 
 // ──────────────────────────────────────────────
 // Token Estimation
@@ -12,24 +13,28 @@ impl TokenEstimator {
     /// Matches cl100k_base empirical measurements (OpenAI cookbook).
     const MESSAGE_OVERHEAD: usize = 4;
 
-    /// Estimate tokens for a text string, adjusting ratio by content type.
+    /// Estimate tokens for a text string using cl100k_base tokenizer.
     pub fn estimate_text(text: &str) -> usize {
         if text.is_empty() {
             return 0;
         }
-        // Heuristic: count structural chars to detect code/JSON density
-        let structural = text
-            .chars()
-            .filter(|c| matches!(c, '{' | '}' | '(' | ')' | '[' | ']' | ';' | '='))
-            .count();
-        let ratio = structural as f64 / text.len() as f64;
-
-        let chars_per_token = if ratio > 0.08 {
-            2.8 // code / JSON — denser than prose
+        if let Ok(bpe) = cl100k_base() {
+            bpe.encode_with_special_tokens(text).len()
         } else {
-            4.0 // natural language
-        };
-        (text.len() as f64 / chars_per_token).ceil() as usize
+            // Heuristic fallback: count structural chars to detect code/JSON density
+            let structural = text
+                .chars()
+                .filter(|c| matches!(c, '{' | '}' | '(' | ')' | '[' | ']' | ';' | '='))
+                .count();
+            let ratio = structural as f64 / text.len() as f64;
+
+            let chars_per_token = if ratio > 0.08 {
+                2.8 // code / JSON — denser than prose
+            } else {
+                4.0 // natural language
+            };
+            (text.len() as f64 / chars_per_token).ceil() as usize
+        }
     }
 
     /// Estimate tokens for a single chat message `{"role":..., "content":...}`.
@@ -186,5 +191,54 @@ impl ContextManager {
 impl Default for ContextManager {
     fn default() -> Self {
         Self::new(ContextBudget::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_token_estimator_exact() {
+        // "hello" = 1 token, " world" = 1 token (cl100k)
+        assert_eq!(TokenEstimator::estimate_text("hello world"), 2);
+        assert_eq!(TokenEstimator::estimate_text(""), 0);
+
+        let msg = json!({
+            "role": "user",
+            "content": "hello world"
+        });
+        // 1 + 2 + 4 = 7
+        assert_eq!(TokenEstimator::estimate_message(&msg), 7);
+    }
+
+    #[test]
+    fn test_context_manager_compaction() {
+        let budget = ContextBudget {
+            model_window: 25,
+            system_prompt_tokens: 0,
+            tool_descriptor_tokens: 0,
+            response_headroom: 5,
+        };
+        // Available for messages = 20 tokens.
+        let manager = ContextManager::new(budget);
+
+        // Keep first N is 1.
+        let msg_goal = json!({"role": "user", "content": "goal"}); // "goal" is 1 token => total = 1+1+4 = 6 tokens
+        let msg_1 = json!({"role": "assistant", "content": "reply one"}); // "reply" " one" is 2 tokens => total = 1+2+4 = 7 tokens
+        let msg_2 = json!({"role": "user", "content": "reply two"}); // "reply" " two" is 2 tokens => total = 1+2+4 = 7 tokens
+        let msg_3 = json!({"role": "assistant", "content": "reply three"}); // "reply" " three" is 2 tokens => total = 1+2+4 = 7 tokens
+        let msg_4 = json!({"role": "user", "content": "reply four"}); // "reply" " four" is 2 tokens => total = 1+2+4 = 7 tokens
+
+        // Total for [goal, msg_1, msg_2, msg_3, msg_4] = 6 + 7 + 7 + 7 + 7 = 34 tokens (> 20 available)
+        let messages = vec![msg_goal.clone(), msg_1.clone(), msg_2.clone(), msg_3.clone(), msg_4.clone()];
+        let (compacted, was_compacted) = manager.compact_if_needed(messages);
+
+        assert!(was_compacted);
+        // Should keep the first (goal) and the last (msg_4), plus a system notice message
+        assert_eq!(compacted.len(), 3);
+        assert_eq!(compacted[0]["content"], "goal");
+        assert!(compacted[1]["content"].as_str().unwrap().contains("omitted"));
+        assert_eq!(compacted[2]["content"], "reply four");
     }
 }

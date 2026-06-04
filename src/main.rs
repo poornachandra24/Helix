@@ -26,7 +26,6 @@ enum Command {
     },
     /// Configure models and providers
     Config,
-
 }
 
 #[tokio::main]
