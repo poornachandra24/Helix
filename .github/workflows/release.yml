@@ -1,0 +1,175 @@
+name: Build and Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Release Binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ""
+            archive_ext: "tar.gz"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            suffix: ""
+            archive_ext: "tar.gz"
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: ""
+            archive_ext: "tar.gz"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: ".exe"
+            archive_ext: "zip"
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install OpenBLAS (Linux Only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev
+
+      - name: Setup Test Directories
+        shell: bash
+        run: mkdir -p wasm_jail
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-release
+
+      - name: Run Test Suite (Release Mode)
+        run: cargo test --release --all-features
+
+      - name: Build Target Release Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare Binary Artifacts (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          cp ../../../LICENSE .
+          cp ../../../README.md .
+          tar -czf ../../../helix-${{ matrix.target }}.tar.gz helix LICENSE README.md
+          cd ../../..
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum helix-${{ matrix.target }}.tar.gz > helix-${{ matrix.target }}.tar.gz.sha256
+          else
+            shasum -a 256 helix-${{ matrix.target }}.tar.gz > helix-${{ matrix.target }}.tar.gz.sha256
+          fi
+
+      - name: Prepare Binary Artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Copy-Item ../../../LICENSE .
+          Copy-Item ../../../README.md .
+          Compress-Archive -Path helix.exe, LICENSE, README.md -DestinationPath ../../../helix-${{ matrix.target }}.zip
+          cd ../../..
+          $hash = (Get-FileHash helix-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  helix-${{ matrix.target }}.zip" | Out-File -FilePath helix-${{ matrix.target }}.zip.sha256 -Encoding ascii
+
+      - name: Upload Build Archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: helix-archive-${{ matrix.target }}
+          path: helix-${{ matrix.target }}.${{ matrix.archive_ext }}
+
+      - name: Upload Checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: helix-checksum-${{ matrix.target }}
+          path: helix-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rearrange Artifacts for Upload
+        run: |
+          mkdir -p release_files
+          find artifacts -name "helix-*" -exec cp {} release_files/ \;
+          ls -la release_files/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_files/*.tar.gz
+            release_files/*.zip
+            release_files/*.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker-release:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Tag Version
+        id: get_version
+        run: |
+          TAG=${{ github.ref_name }}
+          VERSION=${TAG#v}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/helix:latest
+            ghcr.io/${{ github.repository_owner }}/helix:${{ steps.get_version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

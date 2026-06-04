@@ -1,19 +1,19 @@
 # Helix Project Launch Checklist
 
 ## 1️⃣ Repository & Licensing
-- [ ] Add `LICENSE` (MIT) and ensure it is in the repo root.
+- [x] Add `LICENSE` (MIT) and ensure it is in the repo root.
 - [ ] Add `CODE_OF_CONDUCT.md`.
-- [ ] Add `CONTRIBUTING.md` with guidelines for fork‑and‑PR workflow.
-- [ ] Verify `Cargo.toml` contains correct package metadata (name, version, repository URL, license).
+- [x] Add `CONTRIBUTING.md` with guidelines for fork‑and‑PR workflow.
+- [x] Verify `Cargo.toml` contains correct package metadata (name, version, repository URL, license).
 
 ## 2️⃣ CI / Automation
-- [ ] Set up GitHub Actions workflow:
+- [x] Set up GitHub Actions workflow:
   - Build on Linux, macOS, Windows.
   - Run `cargo fmt -- --check` and `cargo clippy -- -D warnings`.
   - Run `cargo test --all-features`.
   - Run benchmark suite and publish results as an artifact.
-- [ ] Enable Dependabot for Cargo updates.
-- [ ] Add a security‑gate check that runs on every PR (static analysis, cargo audit).
+- [x] Enable Dependabot for Cargo updates.
+- [x] Add a security‑gate check that runs on every PR (static analysis, cargo audit).
 
 ## 3️⃣ Documentation
 - [ ] Create `README.md` with:
@@ -21,18 +21,18 @@
   - Quick‑start (clone → `cargo run`).
   - Feature matrix vs. competitors.
   - Link to the full docs site.
-- [ ] Generate docs with `cargo doc --no-deps` and publish to GitHub Pages (or docs.rs).
-- [ ] Add `docs/` folder with:
+- [x] Generate docs with `cargo doc --no-deps` and publish to GitHub Pages (or docs.rs).
+- [x] Add `docs/` folder with:
   - Architecture overview.
   - Plugin development guide.
   - Edge‑deployment guide.
-- [ ] Add `CHANGELOG.md` following Keep a Changelog format.
+- [x] Add `CHANGELOG.md` following Keep a Changelog format.
 
 ## 4️⃣ Release Assets
-- [ ] Build release binaries for Linux, macOS, Windows (static linking where possible).
-- [ ] Create a minimal Dockerfile (`FROM scratch` + binary) and push to Docker Hub.
+- [x] Build release binaries for Linux, macOS, Windows (static linking where possible).
+- [x] Create a minimal Dockerfile (`FROM scratch` + binary) and push to Docker Hub.
 - [ ] Tag releases with semantic versioning (`vX.Y.Z`).
-- [ ] Attach binaries and Docker image digest to the GitHub Release.
+- [x] Attach binaries and Docker image digest to the GitHub Release.
 
 ## 5️⃣ Community & Governance
 - [ ] Set up Discord/Matrix community server and add invite link to README.
