@@ -281,7 +281,7 @@ for line in sys.stdin:
                     }}
                 }}
             }}"#,
-            script_path.display()
+            script_path.to_string_lossy().replace('\\', "/")
         );
         std::fs::write(&config_path, config_json).unwrap();
 

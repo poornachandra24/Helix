@@ -539,6 +539,16 @@ pub fn resolve_and_validate_path(base_dir: &Path, user_path: &str) -> Result<Pat
         )
     })?;
 
+    #[cfg(target_os = "windows")]
+    let canonical_base = {
+        let base_str = canonical_base.to_string_lossy();
+        if base_str.starts_with(r#"\\?\"#) {
+            PathBuf::from(&base_str[4..])
+        } else {
+            canonical_base
+        }
+    };
+
     // Canonicalize target (handling non-existing suffix components)
     let canonical_target = if normalized.exists() {
         normalized.canonicalize()?
@@ -558,6 +568,16 @@ pub fn resolve_and_validate_path(base_dir: &Path, user_path: &str) -> Result<Pat
             canon_ancestor.join(suffix)
         } else {
             normalized.clone()
+        }
+    };
+
+    #[cfg(target_os = "windows")]
+    let canonical_target = {
+        let target_str = canonical_target.to_string_lossy();
+        if target_str.starts_with(r#"\\?\"#) {
+            PathBuf::from(&target_str[4..])
+        } else {
+            canonical_target
         }
     };
 
