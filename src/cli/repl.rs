@@ -70,6 +70,10 @@ fn print_help() {
             "/thinking [level]",
             "set or show reasoning effort/budget (low, medium, high, off, or tokens)",
         ),
+        (
+            "/optimize",
+            "force SONA neural adaptation & parameter consolidation",
+        ),
         ("/exit | /quit", "exit the REPL session"),
     ];
     for (cmd, desc) in general {
@@ -200,6 +204,26 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             "/clear" => {
                 engine.global_messages.clear();
                 println!("{}", style("✔ Context cleared.").green());
+                continue;
+            }
+            "/optimize" | "/learn" => {
+                if let Some(ref sona) = engine.sona {
+                    println!(
+                        "\n  {}",
+                        style("SONA NEURAL ADAPTATION CONSOLIDATION").bold().cyan()
+                    );
+                    println!("  {}", style("─".repeat(50)).color256(240));
+                    print!("  ⦿ Compressing trajectories and training projection... ");
+                    std::io::stdout().flush()?;
+                    let result = sona.force_learn();
+                    println!("done.");
+                    println!("  {}", style(&result).green());
+
+                    // Save state after training
+                    save_sona_state(&data_dir, sona);
+                } else {
+                    println!("{}", style("✘ Error: SONA engine is not active.").red());
+                }
                 continue;
             }
             "/status" => {
