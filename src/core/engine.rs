@@ -1,14 +1,14 @@
 use anyhow::Result;
 use console::style;
-use serde_json::{json, Value};
+use ruvector_sona::SonaEngine;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
-use ruvector_sona::SonaEngine;
 
 use super::context::ContextManager;
 use super::metrics::{MetricsCollector, TurnTimer};
-use crate::model::{ModelAdapter, ModelResponse, ToolCall};
 use super::persistence::Session;
+use crate::model::{ModelAdapter, ModelResponse, ToolCall};
 use crate::tools::ToolRegistry;
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -76,16 +76,37 @@ impl Engine {
             ("hi", "Hello! How can I help you today?"),
             ("hello", "Hello! How can I help you today?"),
             ("hey", "Hey there! How can I help you today?"),
-            ("sup", "Not much! How can I help you with your codebase today?"),
+            (
+                "sup",
+                "Not much! How can I help you with your codebase today?",
+            ),
             ("yo", "Yo! How can I help you today?"),
-            ("hello there", "General Kenobi! Or rather, hello! How can I help you today?"),
+            (
+                "hello there",
+                "General Kenobi! Or rather, hello! How can I help you today?",
+            ),
             ("hi there", "Hello! How can I help you today?"),
-            ("how are you", "I'm doing great, thank you! Ready to help you with your code."),
-            ("what are you", "I am Helix, a local, high-performance, tool-calling AI agent built in Rust."),
+            (
+                "how are you",
+                "I'm doing great, thank you! Ready to help you with your code.",
+            ),
+            (
+                "what are you",
+                "I am Helix, a local, high-performance, tool-calling AI agent built in Rust.",
+            ),
             ("who are you", "I am Helix, your local AI coding assistant."),
-            ("what is this", "This is Helix, an autonomous coding agent harness designed to run with local or cloud LLMs."),
-            ("how does this work", "Helix connects to your LLM provider of choice, manages workspace memories, and executes tools like bash and file operations to help you build software."),
-            ("what can you do", "I can search and read workspace files, execute sandboxed shell commands, run local tools via the Model Context Protocol (MCP), and help you write or debug code."),
+            (
+                "what is this",
+                "This is Helix, an autonomous coding agent harness designed to run with local or cloud LLMs.",
+            ),
+            (
+                "how does this work",
+                "Helix connects to your LLM provider of choice, manages workspace memories, and executes tools like bash and file operations to help you build software.",
+            ),
+            (
+                "what can you do",
+                "I can search and read workspace files, execute sandboxed shell commands, run local tools via the Model Context Protocol (MCP), and help you write or debug code.",
+            ),
         ];
 
         let mut cache = Vec::new();
@@ -109,11 +130,7 @@ impl Engine {
         self
     }
 
-    pub fn update_model(
-        &mut self,
-        new_model: Box<dyn ModelAdapter>,
-        new_context: ContextManager,
-    ) {
+    pub fn update_model(&mut self, new_model: Box<dyn ModelAdapter>, new_context: ContextManager) {
         self.model = new_model;
         self.context = new_context;
     }
@@ -132,7 +149,10 @@ impl Engine {
             if let Some(name) = parsed.get("name").and_then(|n| n.as_str()) {
                 tool_name = Some(name.to_string());
             } else if let Some(first) = parsed.as_array().and_then(|c| c.first()) {
-                tool_name = first.get("name").and_then(|n| n.as_str()).map(|n| n.to_string());
+                tool_name = first
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|n| n.to_string());
             }
         } else if let Some(start_idx) = raw_text.find("\"name\"") {
             let sub = &raw_text[start_idx..];
@@ -154,7 +174,12 @@ impl Engine {
 
         if let Some(ref name) = tool_name {
             if self.tools.get(name).is_none() {
-                let valid_names: Vec<String> = self.tools.descriptors().iter().map(|d| d.name.clone()).collect();
+                let valid_names: Vec<String> = self
+                    .tools
+                    .descriptors()
+                    .iter()
+                    .map(|d| d.name.clone())
+                    .collect();
                 diagnosis.push_str(&format!(
                     "Tool name '{}' is NOT registered. Available tools are: {:?}.\nChoose only from the registered tools.\n",
                     name, valid_names
@@ -164,15 +189,21 @@ impl Engine {
                 let schema = tool.parameters_schema();
                 diagnosis.push_str(&format!(
                     "For tool '{}', the expected JSON parameter schema is:\n{}\n",
-                    name, serde_json::to_string_pretty(&schema).unwrap_or_default()
+                    name,
+                    serde_json::to_string_pretty(&schema).unwrap_or_default()
                 ));
-                
+
                 if let Ok(parsed) = serde_json::from_str::<Value>(raw_text) {
-                    let args = parsed.get("arguments").or_else(|| parsed.get("args")).unwrap_or(&parsed);
+                    let args = parsed
+                        .get("arguments")
+                        .or_else(|| parsed.get("args"))
+                        .unwrap_or(&parsed);
                     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
                         let mut missing = Vec::new();
                         for req_field in required {
-                            if let Some(field_name) = req_field.as_str().filter(|name| args.get(*name).is_none()) {
+                            if let Some(field_name) =
+                                req_field.as_str().filter(|name| args.get(*name).is_none())
+                            {
                                 missing.push(field_name);
                             }
                         }
@@ -207,14 +238,21 @@ impl Engine {
         let mut retries_used = 0usize;
 
         for attempt in 1..=self.max_retries {
-            let tx = if attempt == 1 { stream_tx.clone() } else { None };
+            let tx = if attempt == 1 {
+                stream_tx.clone()
+            } else {
+                None
+            };
 
             if attempt > 1 {
                 retries_used += 1;
                 tracing::warn!(attempt, max = self.max_retries, "Local Healer retry");
             }
 
-            let response = self.model.call(system_prompt, &local_messages, tools.clone(), tx).await?;
+            let response = self
+                .model
+                .call(system_prompt, &local_messages, tools.clone(), tx)
+                .await?;
 
             match response {
                 ModelResponse::ToolCalls(_) | ModelResponse::EndTurn(_) => {
@@ -243,10 +281,17 @@ impl Engine {
     /// - Read-only tools are dispatched in parallel via `tokio::spawn`.
     ///
     /// Returns `(results, total_tool_count)`.
-    async fn dispatch_tools(&self, calls: Vec<ToolCall>, stream_tx: Option<UnboundedSender<String>>) -> (Vec<(ToolCall, String)>, usize) {
+    async fn dispatch_tools(
+        &self,
+        calls: Vec<ToolCall>,
+        stream_tx: Option<UnboundedSender<String>>,
+    ) -> (Vec<(ToolCall, String)>, usize) {
         let total = calls.len();
         let needs_serial = calls.iter().any(|c| {
-            self.tools.get(&c.name).map(|t| t.requires_confirmation()).unwrap_or(false)
+            self.tools
+                .get(&c.name)
+                .map(|t| t.requires_confirmation())
+                .unwrap_or(false)
         });
 
         let results = if needs_serial || calls.len() == 1 {
@@ -256,7 +301,7 @@ impl Engine {
                     let _ = tx.send(format!("\x1b[SExecuting {}...", call.name));
                 }
                 let result = match self.tools.dispatch(&call.name, call.args.clone()).await {
-                    Ok(r)  => r,
+                    Ok(r) => r,
                     Err(e) => format!("Error in tool '{}': {}", call.name, e),
                 };
                 results.push((call, result));
@@ -271,7 +316,10 @@ impl Engine {
             );
             if let Some(ref tx) = stream_tx {
                 let _ = tx.send(format!("\x1b[T{}", msg));
-                let _ = tx.send(format!("\x1b[SRunning {} tools concurrently...", calls.len()));
+                let _ = tx.send(format!(
+                    "\x1b[SRunning {} tools concurrently...",
+                    calls.len()
+                ));
             } else {
                 println!("{}", msg);
             }
@@ -281,7 +329,9 @@ impl Engine {
                 let args = call.args.clone();
                 let registry = Arc::clone(&self.tools);
                 handles.push(tokio::spawn(async move {
-                    registry.dispatch(&name, args).await
+                    registry
+                        .dispatch(&name, args)
+                        .await
                         .unwrap_or_else(|e| format!("Error in tool '{}': {}", name, e))
                 }));
             }
@@ -289,7 +339,7 @@ impl Engine {
             let mut results = Vec::new();
             for (call, handle) in calls.into_iter().zip(handles) {
                 let result = match handle.await {
-                    Ok(r)  => r,
+                    Ok(r) => r,
                     Err(e) => format!("Task join error: {}", e),
                 };
                 results.push((call, result));
@@ -320,17 +370,22 @@ impl Engine {
         let timer = TurnTimer::start(input);
 
         // Per-turn counters — accumulated across all steps in this turn
-        let mut turn_tool_calls: usize   = 0;
+        let mut turn_tool_calls: usize = 0;
         let mut turn_healer_retries: usize = 0;
-        let mut turn_compaction_fired  = false;
-        let mut turn_steps: usize        = 0;
+        let mut turn_compaction_fired = false;
+        let mut turn_steps: usize = 0;
 
         let query_embedding = if let Some(ref mut memory_engine) = self.memory {
-            memory_engine.embed_text(input).unwrap_or_else(|_| vec![0.0; 384])
+            memory_engine
+                .embed_text(input)
+                .unwrap_or_else(|_| vec![0.0; 384])
         } else {
             vec![0.0; 384]
         };
-        let sona_trajectory = self.sona.as_ref().map(|s| s.begin_trajectory(query_embedding.clone()));
+        let sona_trajectory = self
+            .sona
+            .as_ref()
+            .map(|s| s.begin_trajectory(query_embedding.clone()));
 
         // ── Check Semantic Cache ─────────────────────────────
         let cleaned = input.trim().to_lowercase();
@@ -349,7 +404,12 @@ impl Engine {
             for (q, r, emb) in &self.semantic_cache {
                 let sim = cosine_similarity(&query_embedding, emb);
                 if sim > 0.88 {
-                    tracing::info!("Semantic cache hit for '{}' matching '{}' with similarity {:.4}", cleaned, q, sim);
+                    tracing::info!(
+                        "Semantic cache hit for '{}' matching '{}' with similarity {:.4}",
+                        cleaned,
+                        q,
+                        sim
+                    );
                     cache_hit = Some(r.clone());
                     break;
                 }
@@ -358,8 +418,10 @@ impl Engine {
 
         if let Some(response) = cache_hit {
             // Echo inputs to local session/global logs
-            self.global_messages.push(json!({"role": "user", "content": input}));
-            self.session.append(json!({"event": "user_input", "content": input}))?;
+            self.global_messages
+                .push(json!({"role": "user", "content": input}));
+            self.session
+                .append(json!({"event": "user_input", "content": input}))?;
 
             // Stream response to the user with a dynamic token pacing animation
             if let Some(ref tx) = stream_tx {
@@ -372,24 +434,26 @@ impl Engine {
                 let _ = tx.send("\x04".to_string());
             }
 
-            self.global_messages.push(json!({"role": "assistant", "content": response}));
-            self.session.append(json!({"event": "assistant_output", "content": response}))?;
+            self.global_messages
+                .push(json!({"role": "assistant", "content": response}));
+            self.session
+                .append(json!({"event": "assistant_output", "content": response}))?;
 
             // Commit to memory
             if let Some(ref mut memory_engine) = self.memory
-                && let Ok(workspace_dir) = std::env::current_dir() {
-                    let workspace_str = workspace_dir.to_string_lossy().to_string();
-                    let memory_text = format!("User: {}\nAssistant: {}", input, response);
-                    let _ = memory_engine.insert(&memory_text, None, &workspace_str);
-                }
+                && let Ok(workspace_dir) = std::env::current_dir()
+            {
+                let workspace_str = workspace_dir.to_string_lossy().to_string();
+                let memory_text = format!("User: {}\nAssistant: {}", input, response);
+                let _ = memory_engine.insert(&memory_text, None, &workspace_str);
+            }
 
             // Record metrics
             if let Some(ref mut collector) = self.metrics {
                 let m = timer.finish(
-                    turn_index,
-                    0, // steps
-                    0, // tool calls
-                    0, // healer retries
+                    turn_index, 0,     // steps
+                    0,     // tool calls
+                    0,     // healer retries
                     false, // compaction fired
                     false, // is_err
                 );
@@ -399,8 +463,10 @@ impl Engine {
             return Ok(response);
         }
 
-        self.global_messages.push(json!({"role": "user", "content": input}));
-        self.session.append(json!({"event": "user_input", "content": input}))?;
+        self.global_messages
+            .push(json!({"role": "user", "content": input}));
+        self.session
+            .append(json!({"event": "user_input", "content": input}))?;
 
         // 1. Retrieve relevant workspace memories and append them to the system prompt
         let mut final_system_prompt = system_prompt.to_string();
@@ -412,7 +478,9 @@ impl Engine {
             }
             if let Ok(workspace_dir) = std::env::current_dir() {
                 let workspace_str = workspace_dir.to_string_lossy().to_string();
-                if let Ok(matches) = memory_engine.search(input, self.sona.as_ref(), &workspace_str, 5) {
+                if let Ok(matches) =
+                    memory_engine.search(input, self.sona.as_ref(), &workspace_str, 5)
+                {
                     if !matches.is_empty() {
                         if let Some(ref tx) = stream_tx {
                             let bullet = style("◆").color256(81);
@@ -429,9 +497,11 @@ impl Engine {
                             );
                             let _ = tx.send(format!("\x1b[T{}", msg));
                         }
-                        let mut memory_str = String::from("\n\n### RELEVANT MEMORIES (from this workspace):\n");
+                        let mut memory_str =
+                            String::from("\n\n### RELEVANT MEMORIES (from this workspace):\n");
                         for m in matches {
-                            memory_str.push_str(&format!("- {} (similarity: {:.2})\n", m.text, m.score));
+                            memory_str
+                                .push_str(&format!("- {} (similarity: {:.2})\n", m.text, m.score));
                             retrieved_texts.push(m.text.clone());
                         }
                         final_system_prompt.push_str(&memory_str);
@@ -448,14 +518,16 @@ impl Engine {
         }
 
         let stream_tx_clone = stream_tx.clone();
-        let result = self.run_turn_inner(
-            &final_system_prompt,
-            stream_tx,
-            &mut turn_steps,
-            &mut turn_tool_calls,
-            &mut turn_healer_retries,
-            &mut turn_compaction_fired,
-        ).await;
+        let result = self
+            .run_turn_inner(
+                &final_system_prompt,
+                stream_tx,
+                &mut turn_steps,
+                &mut turn_tool_calls,
+                &mut turn_healer_retries,
+                &mut turn_compaction_fired,
+            )
+            .await;
 
         if let Some(ref tx) = stream_tx_clone {
             let _ = tx.send("\x04".to_string());
@@ -464,13 +536,14 @@ impl Engine {
         // 2. Commit this turn to memory on success
         if let Ok(ref text) = result
             && let Some(ref mut memory_engine) = self.memory
-                && let Ok(workspace_dir) = std::env::current_dir() {
-                    let workspace_str = workspace_dir.to_string_lossy().to_string();
-                    let memory_text = format!("User: {}\nAssistant: {}", input, text);
-                    if let Err(e) = memory_engine.insert(&memory_text, None, &workspace_str) {
-                        tracing::error!("Failed to save memory: {}", e);
-                    }
-                }
+            && let Ok(workspace_dir) = std::env::current_dir()
+        {
+            let workspace_str = workspace_dir.to_string_lossy().to_string();
+            let memory_text = format!("User: {}\nAssistant: {}", input, text);
+            if let Err(e) = memory_engine.insert(&memory_text, None, &workspace_str) {
+                tracing::error!("Failed to save memory: {}", e);
+            }
+        }
 
         // Record metrics regardless of success/failure
         if let Some(ref mut collector) = self.metrics {
@@ -537,12 +610,14 @@ impl Engine {
                 };
                 let _ = tx.send(format!(
                     "\x1b[T  {} [sona] quality {}",
-                    style("·").color256(242), quality_colored
+                    style("·").color256(242),
+                    quality_colored
                 ));
                 if let Some(log_msg) = sona_engine.tick() {
                     let _ = tx.send(format!(
                         "\x1b[T  {} Background loop tick: {}",
-                        sona_tag, style(log_msg).color256(117)
+                        sona_tag,
+                        style(log_msg).color256(117)
                     ));
                 }
             } else if let Some(log_msg) = sona_engine.tick() {
@@ -568,9 +643,13 @@ impl Engine {
 
             if let Some(ref tx) = stream_tx {
                 // Compact dim label — no trailing dashes
-                let loop_label = style(format!("  · loop {}/{}", step, self.max_iterations)).color256(240);
+                let loop_label =
+                    style(format!("  · loop {}/{}", step, self.max_iterations)).color256(240);
                 let _ = tx.send(format!("\x1b[T{}", loop_label));
-                let _ = tx.send(format!("\x1b[SWorking (loop {}/{})...", step, self.max_iterations));
+                let _ = tx.send(format!(
+                    "\x1b[SWorking (loop {}/{})...",
+                    step, self.max_iterations
+                ));
             }
 
             let (compacted, was_compacted) =
@@ -586,20 +665,27 @@ impl Engine {
             self.global_messages = compacted;
 
             let tx = stream_tx.clone();
-            let (response, retries) =
-                self.get_valid_action(system_prompt, &self.global_messages, tx).await?;
+            let (response, retries) = self
+                .get_valid_action(system_prompt, &self.global_messages, tx)
+                .await?;
             *healer_retries_out += retries;
 
             match response {
                 ModelResponse::EndTurn(text) => {
-                    self.session.append(json!({"event": "end_turn", "content": &text}))?;
-                    self.global_messages.push(json!({"role": "assistant", "content": &text}));
-                    
+                    self.session
+                        .append(json!({"event": "end_turn", "content": &text}))?;
+                    self.global_messages
+                        .push(json!({"role": "assistant", "content": &text}));
+
                     return Ok(text);
                 }
 
                 ModelResponse::ToolCalls(calls) => {
-                    let tool_names = calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ");
+                    let tool_names = calls
+                        .iter()
+                        .map(|c| c.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     let dispatch_msg = format!(
                         "  {} Tool: dispatching {} → {}",
                         style("⦿").color256(220),
@@ -612,11 +698,16 @@ impl Engine {
                         println!("{}", dispatch_msg);
                     }
 
-                    let tool_calls_json: Vec<Value> = calls.iter().map(|c| json!({
-                        "id": c.id,
-                        "type": "function",
-                        "function": { "name": c.name, "arguments": c.args.to_string() }
-                    })).collect();
+                    let tool_calls_json: Vec<Value> = calls
+                        .iter()
+                        .map(|c| {
+                            json!({
+                                "id": c.id,
+                                "type": "function",
+                                "function": { "name": c.name, "arguments": c.args.to_string() }
+                            })
+                        })
+                        .collect();
                     self.global_messages.push(json!({
                         "role": "assistant",
                         "content": null,
@@ -641,11 +732,12 @@ impl Engine {
 
                         if let Some(ref tx) = stream_tx {
                             let check = style("✓").color256(46);
-                            let status_text = if result.contains("Error") || result.contains("failed") {
-                                style("failed").red().bold()
-                            } else {
-                                style("completed").green()
-                            };
+                            let status_text =
+                                if result.contains("Error") || result.contains("failed") {
+                                    style("failed").red().bold()
+                                } else {
+                                    style("completed").green()
+                                };
                             let msg = format!(
                                 "  {} '{}' {} ({} bytes)",
                                 check,
@@ -662,7 +754,10 @@ impl Engine {
                             let head = &result[..max_chars / 2];
                             let tail = &result[result.len() - (max_chars / 2)..];
                             let omitted = result.len() - max_chars;
-                            format!("{}\n\n... [{} bytes omitted by context truncator] ...\n\n{}", head, omitted, tail)
+                            format!(
+                                "{}\n\n... [{} bytes omitted by context truncator] ...\n\n{}",
+                                head, omitted, tail
+                            )
                         } else {
                             result.clone()
                         };
@@ -676,7 +771,9 @@ impl Engine {
 
                     // Close the step box for this tool-use step
                     if let Some(ref tx) = stream_tx {
-                        let footer = style("  └──────────────────────────────────────────────────────────").color256(240);
+                        let footer =
+                            style("  └──────────────────────────────────────────────────────────")
+                                .color256(240);
                         let _ = tx.send(format!("\x1b[T{}", footer));
                     }
                 }
@@ -687,7 +784,10 @@ impl Engine {
             }
         }
 
-        anyhow::bail!("Stopped after {} iterations without a final answer", self.max_iterations)
+        anyhow::bail!(
+            "Stopped after {} iterations without a final answer",
+            self.max_iterations
+        )
     }
 }
 
@@ -704,8 +804,11 @@ mod tests {
         let c = vec![0.0, 1.0, 0.0];
         assert!(cosine_similarity(&a, &c).abs() < 1e-5);
 
-        let d = vec![std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0];
+        let d = vec![
+            std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+        ];
         assert!((cosine_similarity(&a, &d) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
     }
 }
-

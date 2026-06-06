@@ -49,8 +49,12 @@ impl Session {
 
         for line in reader.lines() {
             let line = line?;
-            if line.trim().is_empty() { continue; }
-            let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
 
             match event["event"].as_str() {
                 Some("user_input") => {
@@ -60,7 +64,8 @@ impl Session {
                 }
                 Some("end_turn") => {
                     if let Some(content) = event["content"].as_str() {
-                        messages.push(serde_json::json!({ "role": "assistant", "content": content }));
+                        messages
+                            .push(serde_json::json!({ "role": "assistant", "content": content }));
                     }
                 }
                 _ => {}
@@ -104,7 +109,12 @@ pub fn list_sessions() -> Result<Vec<SessionMeta>> {
                 .map(|s| s.lines().count())
                 .unwrap_or(0);
 
-            Some(SessionMeta { id, path, modified_at: modified, event_count: count })
+            Some(SessionMeta {
+                id,
+                path,
+                modified_at: modified,
+                event_count: count,
+            })
         })
         .collect();
 

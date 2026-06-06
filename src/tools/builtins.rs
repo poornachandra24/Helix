@@ -1,15 +1,20 @@
 use crate::tools::Tool;
-use crate::tools::sandbox::{SharedSandbox, SandboxBackend, SandboxMode};
+use crate::tools::sandbox::{SandboxBackend, SandboxMode, SharedSandbox};
 use anyhow::Result;
 use async_trait::async_trait;
 use console::style;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const OUTPUT_MAX_BYTES: usize = 8_000;
 
 fn truncate(s: String, label: &str) -> String {
     if s.len() > OUTPUT_MAX_BYTES {
-        format!("{}...\n[{} TRUNCATED at {} bytes]", &s[..OUTPUT_MAX_BYTES], label, OUTPUT_MAX_BYTES)
+        format!(
+            "{}...\n[{} TRUNCATED at {} bytes]",
+            &s[..OUTPUT_MAX_BYTES],
+            label,
+            OUTPUT_MAX_BYTES
+        )
     } else {
         s
     }
@@ -30,7 +35,9 @@ impl BashTool {
 
 #[async_trait]
 impl Tool for BashTool {
-    fn name(&self) -> &str { "bash" }
+    fn name(&self) -> &str {
+        "bash"
+    }
     fn description(&self) -> &str {
         "Execute a bash shell command. Use for file operations, running programs, or system queries. Requires 'cmd' parameter."
     }
@@ -43,7 +50,9 @@ impl Tool for BashTool {
             "required": ["cmd"]
         })
     }
-    fn requires_confirmation(&self) -> bool { true }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
 
     async fn call(&self, args: Value) -> Result<String> {
         let cmd = args["cmd"].as_str().unwrap_or("").trim().to_string();
@@ -51,13 +60,20 @@ impl Tool for BashTool {
             anyhow::bail!("'cmd' parameter is required and must not be empty");
         }
 
-        if !crate::cli::helpers::confirm_agent_action("bash", "Execute shell command in active sandbox", Some(&cmd))? {
+        if !crate::cli::helpers::confirm_agent_action(
+            "bash",
+            "Execute shell command in active sandbox",
+            Some(&cmd),
+        )? {
             return Ok("User denied execution. Try a different approach.".into());
         }
 
         let mode = self.sandbox.get_mode();
         if mode == SandboxMode::Docker {
-            println!("🐳 {}", style("Running command in sandboxed Docker container (rust:latest)...").cyan());
+            println!(
+                "🐳 {}",
+                style("Running command in sandboxed Docker container (rust:latest)...").cyan()
+            );
         }
 
         let output = self.sandbox.execute_command(&cmd).await?;
@@ -86,7 +102,9 @@ impl ReadFileTool {
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
+    fn name(&self) -> &str {
+        "read_file"
+    }
     fn description(&self) -> &str {
         "Read the contents of a file. Optionally specify start/end line numbers (1-indexed, inclusive). Returns raw text."
     }
@@ -139,7 +157,9 @@ impl WriteFileTool {
 
 #[async_trait]
 impl Tool for WriteFileTool {
-    fn name(&self) -> &str { "write_file" }
+    fn name(&self) -> &str {
+        "write_file"
+    }
     fn description(&self) -> &str {
         "Write (or overwrite) a file with the given content. Creates parent directories as needed."
     }
@@ -153,14 +173,24 @@ impl Tool for WriteFileTool {
             "required": ["path", "content"]
         })
     }
-    fn requires_confirmation(&self) -> bool { true }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
 
     async fn call(&self, args: Value) -> Result<String> {
         let path = args["path"].as_str().context("'path' is required")?;
         let content = args["content"].as_str().context("'content' is required")?;
 
         let desc = format!("Write {} bytes to file", content.len());
-        let target_details = format!("Path: {}\n---\n{}", path, if content.len() > 200 { format!("{}...", &content[..200]) } else { content.to_string() });
+        let target_details = format!(
+            "Path: {}\n---\n{}",
+            path,
+            if content.len() > 200 {
+                format!("{}...", &content[..200])
+            } else {
+                content.to_string()
+            }
+        );
         if !crate::cli::helpers::confirm_agent_action("write_file", &desc, Some(&target_details))? {
             return Ok("User denied write. No changes made.".into());
         }
@@ -186,7 +216,9 @@ impl ListDirTool {
 
 #[async_trait]
 impl Tool for ListDirTool {
-    fn name(&self) -> &str { "list_dir" }
+    fn name(&self) -> &str {
+        "list_dir"
+    }
     fn description(&self) -> &str {
         "List the contents of a directory, showing names, types (file/dir), and sizes."
     }
@@ -226,7 +258,9 @@ impl WasmExecuteTool {
 
 #[async_trait]
 impl Tool for WasmExecuteTool {
-    fn name(&self) -> &str { "wasm_execute" }
+    fn name(&self) -> &str {
+        "wasm_execute"
+    }
     fn description(&self) -> &str {
         "Execute a WebAssembly (.wasm) file within a secure, highly-sandboxed guest VM. The WASM module must be saved in the workspace first, and have an entrypoint (like 'main' or '_start'). Requires 'wasm_file' parameter."
     }
@@ -268,7 +302,9 @@ impl AddSkillTool {
 
 #[async_trait]
 impl Tool for AddSkillTool {
-    fn name(&self) -> &str { "add_skill" }
+    fn name(&self) -> &str {
+        "add_skill"
+    }
     fn description(&self) -> &str {
         "Save a new domain-specific skill (rules, guidelines, checklist, or quick-start guide) to the agent's long-term memory. The skill will automatically load into the system prompt for all future sessions. Requires 'name' (valid filename without extension, lowercase letters, numbers, and hyphens only, max 64 chars), 'description' (brief summary of what the skill does and when to use it, max 1024 chars), and 'content' (detailed description or markdown content)."
     }
@@ -283,20 +319,42 @@ impl Tool for AddSkillTool {
             "required": ["name", "description", "content"]
         })
     }
-    fn requires_confirmation(&self) -> bool { true }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
 
     async fn call(&self, args: Value) -> Result<String> {
-        let name = args["name"].as_str().context("'name' is required")?.trim().to_string();
-        let description = args["description"].as_str().context("'description' is required")?.trim().to_string();
-        let content = args["content"].as_str().context("'content' is required")?.trim().to_string();
+        let name = args["name"]
+            .as_str()
+            .context("'name' is required")?
+            .trim()
+            .to_string();
+        let description = args["description"]
+            .as_str()
+            .context("'description' is required")?
+            .trim()
+            .to_string();
+        let content = args["content"]
+            .as_str()
+            .context("'content' is required")?
+            .trim()
+            .to_string();
 
         if name.is_empty() || content.is_empty() || description.is_empty() {
-            anyhow::bail!("All parameters ('name', 'description', and 'content') must be non-empty");
+            anyhow::bail!(
+                "All parameters ('name', 'description', and 'content') must be non-empty"
+            );
         }
 
         // Validate name according to Anthropic format: 1-64 chars, lowercase, numbers, and hyphens only
-        if name.len() > 64 || name.chars().any(|c| !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-') {
-            anyhow::bail!("Skill name must be 1-64 characters and contain only lowercase letters, numbers, and hyphens");
+        if name.len() > 64
+            || name
+                .chars()
+                .any(|c| !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-')
+        {
+            anyhow::bail!(
+                "Skill name must be 1-64 characters and contain only lowercase letters, numbers, and hyphens"
+            );
         }
 
         // Cannot contain reserved words: "anthropic", "claude"
@@ -307,7 +365,9 @@ impl Tool for AddSkillTool {
 
         // Validate description according to Anthropic format: 1-1024 chars, no XML tags
         if description.len() > 1024 || description.contains('<') || description.contains('>') {
-            anyhow::bail!("Skill description must be 1-1024 characters and cannot contain XML tags");
+            anyhow::bail!(
+                "Skill description must be 1-1024 characters and cannot contain XML tags"
+            );
         }
 
         // Store metadata in Anthropic format (YAML frontmatter at the top of the file)
@@ -318,7 +378,15 @@ impl Tool for AddSkillTool {
         );
 
         let desc = format!("Save a new domain-specific skill: {}", description);
-        let target_details = format!("Filename: {}.md\nContent Preview:\n---\n{}", name, if formatted_content.len() > 300 { format!("{}...", &formatted_content[..300]) } else { formatted_content.to_string() });
+        let target_details = format!(
+            "Filename: {}.md\nContent Preview:\n---\n{}",
+            name,
+            if formatted_content.len() > 300 {
+                format!("{}...", &formatted_content[..300])
+            } else {
+                formatted_content.to_string()
+            }
+        );
         if !crate::cli::helpers::confirm_agent_action("add_skill", &desc, Some(&target_details))? {
             return Ok("User denied adding skill. No changes made.".into());
         }
@@ -329,7 +397,10 @@ impl Tool for AddSkillTool {
         tokio::fs::create_dir_all(&self.skills_dir).await?;
         tokio::fs::write(&path, formatted_content).await?;
 
-        Ok(format!("✅ Skill '{}' successfully saved! It will be active in all future sessions.", name))
+        Ok(format!(
+            "✅ Skill '{}' successfully saved! It will be active in all future sessions.",
+            name
+        ))
     }
 }
 
@@ -361,7 +432,9 @@ impl Default for WebFetchTool {
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str { "web_fetch" }
+    fn name(&self) -> &str {
+        "web_fetch"
+    }
     fn description(&self) -> &str {
         "Fetch a URL and return its plain-text content. Useful for reading documentation, APIs, or web pages."
     }
@@ -379,14 +452,23 @@ impl Tool for WebFetchTool {
         let url = args["url"].as_str().context("'url' is required")?;
         tracing::debug!(url = %url, "Fetching URL");
 
-        let resp = self.client.get(url).send().await
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
             .map_err(|e| anyhow::anyhow!("Request failed for '{}': {}", url, e))?;
 
         let status = resp.status();
         let body = resp.text().await?;
 
         if !status.is_success() {
-            return Ok(format!("HTTP {} for {}\n{}", status, url, truncate(body, "BODY")));
+            return Ok(format!(
+                "HTTP {} for {}\n{}",
+                status,
+                url,
+                truncate(body, "BODY")
+            ));
         }
 
         let text = strip_html_tags(&body);
@@ -397,11 +479,11 @@ impl Tool for WebFetchTool {
 fn strip_html_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut chars = html.chars().peekable();
-    
+
     let mut in_script = false;
     let mut in_style = false;
     let mut tag_buffer = String::new();
-    
+
     while let Some(c) = chars.next() {
         if c == '<' {
             tag_buffer.clear();
@@ -422,20 +504,28 @@ fn strip_html_tags(html: &str) -> String {
                     break;
                 }
             }
-            
+
             if is_closing {
                 if tag_buffer == "script" {
                     in_script = false;
                 } else if tag_buffer == "style" {
                     in_style = false;
-                } else if matches!(tag_buffer.as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li") {
+                } else if matches!(
+                    tag_buffer.as_str(),
+                    "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li"
+                ) {
                     out.push('\n');
                 }
             } else if tag_buffer == "script" {
                 in_script = true;
             } else if tag_buffer == "style" {
                 in_style = true;
-            } else if tag_buffer == "br" || matches!(tag_buffer.as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li") {
+            } else if tag_buffer == "br"
+                || matches!(
+                    tag_buffer.as_str(),
+                    "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li"
+                )
+            {
                 out.push('\n');
             }
         } else if !in_script && !in_style {
@@ -472,11 +562,11 @@ fn strip_html_tags(html: &str) -> String {
             }
         }
     }
-    
+
     let mut cleaned = String::new();
     let mut last_was_newline = false;
     let mut last_was_space = false;
-    
+
     for c in out.chars() {
         if c == '\n' {
             if !last_was_newline {
@@ -495,20 +585,23 @@ fn strip_html_tags(html: &str) -> String {
             last_was_space = false;
         }
     }
-    
+
     cleaned.trim().to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::sandbox::{SharedSandbox, SandboxMode};
+    use crate::tools::sandbox::{SandboxMode, SharedSandbox};
 
     #[test]
     fn test_strip_html_tags() {
         let html = "<html><head><style>body { color: red; }</style></head><body><h1>Title</h1><p>Hello &amp; welcome to the &lt;Helix&gt; harness!&nbsp;</p><script>console.log('hi');</script><br>Goodbye.</body></html>";
         let text = strip_html_tags(html);
-        assert_eq!(text, "Title\nHello & welcome to the <Helix> harness! \nGoodbye.");
+        assert_eq!(
+            text,
+            "Title\nHello & welcome to the <Helix> harness! \nGoodbye."
+        );
     }
 
     #[tokio::test]
@@ -527,30 +620,48 @@ mod tests {
         let sandbox = SharedSandbox::new(SandboxMode::Local);
         let tool = ReadFileTool::new(sandbox);
 
-        let res = tool.call(json!({
-            "path": path_str,
-            "start_line": 2,
-            "end_line": 5
-        })).await.unwrap();
+        let res = tool
+            .call(json!({
+                "path": path_str,
+                "start_line": 2,
+                "end_line": 5
+            }))
+            .await
+            .unwrap();
         assert_eq!(res, "Line 2\nLine 3\nLine 4\nLine 5");
 
-        let res = tool.call(json!({
-            "path": path_str,
-            "start_line": 8,
-            "end_line": 4
-        })).await.unwrap();
+        let res = tool
+            .call(json!({
+                "path": path_str,
+                "start_line": 8,
+                "end_line": 4
+            }))
+            .await
+            .unwrap();
         assert_eq!(res, "");
 
-        let res = tool.call(json!({
-            "path": path_str,
-            "start_line": 50,
-            "end_line": 60
-        })).await.unwrap();
+        let res = tool
+            .call(json!({
+                "path": path_str,
+                "start_line": 50,
+                "end_line": 60
+            }))
+            .await
+            .unwrap();
         assert_eq!(res, "");
 
-        let res = tool.call(json!({
-            "path": path_str
-        })).await.unwrap();
-        assert_eq!(res, (1..=10).map(|i| format!("Line {}", i)).collect::<Vec<_>>().join("\n"));
+        let res = tool
+            .call(json!({
+                "path": path_str
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            res,
+            (1..=10)
+                .map(|i| format!("Line {}", i))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
 }

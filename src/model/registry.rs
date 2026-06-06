@@ -22,7 +22,10 @@ const FALLBACK_CONTEXT_WINDOW: usize = 8_192;
 /// Returns the override if set, otherwise probes the provider and external sources.
 pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usize {
     if let Some(override_val) = config.context_window_override {
-        tracing::info!(context_window = override_val, "Using manual context_window_override");
+        tracing::info!(
+            context_window = override_val,
+            "Using manual context_window_override"
+        );
         return override_val;
     }
 
@@ -37,21 +40,42 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
             model,
             provider.api_key.as_deref(), // ← auth required for Ollama Cloud
             client,
-        ).await {
-            tracing::info!(context_window = w, source = "ollama /api/show", "Context window resolved");
-            return w;
-        }
+        )
+        .await
+    {
+        tracing::info!(
+            context_window = w,
+            source = "ollama /api/show",
+            "Context window resolved"
+        );
+        return w;
+    }
 
     // Strategy 2 — Provider's own /v1/models/{id} (OpenAI and compatible)
     if provider.api_format == ApiFormat::OpenAiCompatible
-        && let Some(w) = query_openai_models(&provider.base_url, model, provider.api_key.as_deref(), client).await {
-            tracing::info!(context_window = w, source = "provider /v1/models", "Context window resolved");
-            return w;
-        }
+        && let Some(w) = query_openai_models(
+            &provider.base_url,
+            model,
+            provider.api_key.as_deref(),
+            client,
+        )
+        .await
+    {
+        tracing::info!(
+            context_window = w,
+            source = "provider /v1/models",
+            "Context window resolved"
+        );
+        return w;
+    }
 
     // Strategy 3 — OpenRouter public catalogue (free, no auth, covers 1000+ models)
     if let Some(w) = query_openrouter_catalogue(model, client).await {
-        tracing::info!(context_window = w, source = "openrouter catalogue", "Context window resolved");
+        tracing::info!(
+            context_window = w,
+            source = "openrouter catalogue",
+            "Context window resolved"
+        );
         return w;
     }
 
@@ -103,9 +127,10 @@ async fn query_ollama_show(
     if let Some(info) = json.get("modelinfo").and_then(|v| v.as_object()) {
         for (key, val) in info {
             if (key.ends_with(".context_length") || key == "context_length")
-                && let Some(n) = val.as_u64() {
-                    return Some(n as usize);
-                }
+                && let Some(n) = val.as_u64()
+            {
+                return Some(n as usize);
+            }
         }
     }
 
@@ -113,10 +138,12 @@ async fn query_ollama_show(
     if let Some(params) = json.get("parameters").and_then(|v| v.as_str()) {
         for line in params.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 2 && parts[0] == "num_ctx"
-                && let Ok(n) = parts[1].parse::<usize>() {
-                    return Some(n);
-                }
+            if parts.len() == 2
+                && parts[0] == "num_ctx"
+                && let Ok(n) = parts[1].parse::<usize>()
+            {
+                return Some(n);
+            }
         }
     }
 
@@ -139,9 +166,7 @@ async fn query_openai_models(
 ) -> Option<usize> {
     let url = format!("{}/models/{}", base_url.trim_end_matches('/'), model);
 
-    let mut req = client
-        .get(&url)
-        .timeout(std::time::Duration::from_secs(10));
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
 
     if let Some(key) = api_key {
         req = req.bearer_auth(key);
@@ -167,7 +192,10 @@ async fn query_openai_models(
         }
     }
 
-    tracing::debug!("Provider model object for '{}' had no context window field", model);
+    tracing::debug!(
+        "Provider model object for '{}' had no context window field",
+        model
+    );
     None
 }
 
@@ -202,7 +230,11 @@ async fn query_openrouter_catalogue(model: &str, client: &Client) -> Option<usiz
     // "gpt-oss:120b-cloud" → also try "gpt-oss:120b" and "gpt-oss"
     let model_lower = model.to_lowercase();
     let model_no_cloud = model_lower.trim_end_matches("-cloud").to_string();
-    let model_base = model_no_cloud.split(':').next().unwrap_or(&model_no_cloud).to_string();
+    let model_base = model_no_cloud
+        .split(':')
+        .next()
+        .unwrap_or(&model_no_cloud)
+        .to_string();
 
     let candidates: [&str; 3] = [
         model_lower.as_str(),
@@ -215,27 +247,31 @@ async fn query_openrouter_catalogue(model: &str, client: &Client) -> Option<usiz
         let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let id_lower = id.to_lowercase();
         if candidates.iter().any(|c| id_lower == *c)
-            && let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
-                tracing::debug!(id = %id, context_length = n, "OpenRouter exact match");
-                return Some(n as usize);
-            }
+            && let Some(n) = entry.get("context_length").and_then(|v| v.as_u64())
+        {
+            tracing::debug!(id = %id, context_length = n, "OpenRouter exact match");
+            return Some(n as usize);
+        }
     }
 
     // Pass 2: partial match — any candidate is a substring of the OpenRouter ID
     let mut best: Option<(usize, usize)> = None;
     for entry in models.iter() {
-        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+        let id = entry
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
         let id_tail = id.split('/').next_back().unwrap_or("");
-        let matched = candidates.iter().any(|c| {
-            !c.is_empty() && (id.contains(*c) || c.contains(id_tail))
-        });
-        if matched
-            && let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
-                let score = id.len();
-                if best.map(|(_, s)| score > s).unwrap_or(true) {
-                    best = Some((n as usize, score));
-                }
+        let matched = candidates
+            .iter()
+            .any(|c| !c.is_empty() && (id.contains(*c) || c.contains(id_tail)));
+        if matched && let Some(n) = entry.get("context_length").and_then(|v| v.as_u64()) {
+            let score = id.len();
+            if best.map(|(_, s)| score > s).unwrap_or(true) {
+                best = Some((n as usize, score));
             }
+        }
     }
 
     if let Some((ctx, _)) = best {

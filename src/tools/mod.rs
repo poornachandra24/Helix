@@ -43,7 +43,9 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self { tools: HashMap::new() }
+        Self {
+            tools: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, tool: impl Tool + 'static) {
@@ -52,11 +54,15 @@ impl ToolRegistry {
     }
 
     pub fn descriptors(&self) -> Vec<ToolDescriptor> {
-        let mut descs: Vec<ToolDescriptor> = self.tools.values().map(|t| ToolDescriptor {
-            name: t.name().to_string(),
-            description: t.description().to_string(),
-            parameters: t.parameters_schema(),
-        }).collect();
+        let mut descs: Vec<ToolDescriptor> = self
+            .tools
+            .values()
+            .map(|t| ToolDescriptor {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters_schema(),
+            })
+            .collect();
         // Stable ordering so the LLM sees tools in the same order every call
         descs.sort_by(|a, b| a.name.cmp(&b.name));
         descs

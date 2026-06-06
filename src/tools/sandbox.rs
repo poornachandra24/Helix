@@ -40,28 +40,25 @@ pub struct LocalSandbox;
 impl SandboxBackend for LocalSandbox {
     async fn execute_command(&self, cmd: &str) -> Result<CommandResult> {
         let output = if cfg!(target_os = "windows") {
-            Command::new("cmd")
-                .arg("/c")
-                .arg(cmd)
-                .output()
-                .await?
+            Command::new("cmd").arg("/c").arg(cmd).output().await?
         } else {
-            Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .output()
-                .await?
+            Command::new("sh").arg("-c").arg(cmd).output().await?
         };
         let exit_code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        Ok(CommandResult { exit_code, stdout, stderr })
+        Ok(CommandResult {
+            exit_code,
+            stdout,
+            stderr,
+        })
     }
 
     async fn read_file(&self, path: &str) -> Result<String> {
         let current_dir = std::env::current_dir()?;
         let real_path = resolve_and_validate_path(&current_dir, path)?;
-        let content = tokio::fs::read_to_string(&real_path).await
+        let content = tokio::fs::read_to_string(&real_path)
+            .await
             .map_err(|e| anyhow::anyhow!("Cannot read file '{}': {}", path, e))?;
         Ok(content)
     }
@@ -139,18 +136,24 @@ impl DockerSandbox {
                 .arg(container_name)
                 .output();
 
-            let current_dir = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
+            let current_dir =
+                std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
             let current_dir_str = current_dir.to_string_lossy().into_owned();
 
-            let uid = std::process::Command::new("id").arg("-u").output()
+            let uid = std::process::Command::new("id")
+                .arg("-u")
+                .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "1000".to_string());
-            let gid = std::process::Command::new("id").arg("-g").output()
+            let gid = std::process::Command::new("id")
+                .arg("-g")
+                .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_else(|_| "1000".to_string());
 
             let mut start_cmd = std::process::Command::new("docker");
-            start_cmd.arg("run")
+            start_cmd
+                .arg("run")
                 .arg("-d")
                 .arg("--name")
                 .arg(container_name)
@@ -159,18 +162,25 @@ impl DockerSandbox {
                 .arg("512m")
                 .arg("--cpus")
                 .arg("1.0");
-            
-            start_cmd.arg("-v").arg(format!("{}:/workspace", current_dir_str));
+
+            start_cmd
+                .arg("-v")
+                .arg(format!("{}:/workspace", current_dir_str));
 
             if let Some(base_dirs) = directories::BaseDirs::new() {
                 let cargo_home = base_dirs.home_dir().join(".cargo");
                 let registry = cargo_home.join("registry");
                 let git = cargo_home.join("git");
                 if registry.exists() {
-                    start_cmd.arg("-v").arg(format!("{}:/usr/local/cargo/registry", registry.to_string_lossy()));
+                    start_cmd.arg("-v").arg(format!(
+                        "{}:/usr/local/cargo/registry",
+                        registry.to_string_lossy()
+                    ));
                 }
                 if git.exists() {
-                    start_cmd.arg("-v").arg(format!("{}:/usr/local/cargo/git", git.to_string_lossy()));
+                    start_cmd
+                        .arg("-v")
+                        .arg(format!("{}:/usr/local/cargo/git", git.to_string_lossy()));
                 }
             }
 
@@ -205,19 +215,21 @@ impl DockerSandbox {
     fn translate_path(&self, path: &str) -> Result<PathBuf> {
         let current_dir = std::env::current_dir()?;
         let target = Path::new(path);
-        
+
         if target.is_absolute() && target.starts_with(&current_dir) {
             return resolve_and_validate_path(&current_dir, path);
         }
 
         let path_to_validate = if target.is_absolute() {
             if target.starts_with(&self.container_workspace) {
-                target.strip_prefix(&self.container_workspace)
+                target
+                    .strip_prefix(&self.container_workspace)
                     .unwrap_or(target)
                     .to_string_lossy()
                     .into_owned()
             } else {
-                target.strip_prefix("/")
+                target
+                    .strip_prefix("/")
                     .unwrap_or(target)
                     .to_string_lossy()
                     .into_owned()
@@ -274,12 +286,17 @@ impl SandboxBackend for DockerSandbox {
             stdout_clean.pop();
         }
 
-        Ok(CommandResult { exit_code, stdout: stdout_clean, stderr })
+        Ok(CommandResult {
+            exit_code,
+            stdout: stdout_clean,
+            stderr,
+        })
     }
 
     async fn read_file(&self, path: &str) -> Result<String> {
         let real_path = self.translate_path(path)?;
-        let content = tokio::fs::read_to_string(real_path).await
+        let content = tokio::fs::read_to_string(real_path)
+            .await
             .map_err(|e| anyhow::anyhow!("Cannot read file '{}' in sandbox: {}", path, e))?;
         Ok(content)
     }
@@ -326,7 +343,11 @@ impl WasmSandbox {
     fn translate_path(&self, path: &str) -> Result<PathBuf> {
         let target = Path::new(path);
         let path_to_validate = if target.is_absolute() {
-            target.strip_prefix("/").unwrap_or(target).to_string_lossy().into_owned()
+            target
+                .strip_prefix("/")
+                .unwrap_or(target)
+                .to_string_lossy()
+                .into_owned()
         } else {
             path.to_string()
         };
@@ -341,27 +362,29 @@ impl SandboxBackend for WasmSandbox {
         if parts.is_empty() {
             anyhow::bail!("No WASM program specified");
         }
-        
+
         let wasm_file = parts[0];
-        let _args = parts[1..].iter().map(|s| s.to_string()).collect::<Vec<String>>();
-        
+        let _args = parts[1..]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+
         let real_wasm_path = self.translate_path(wasm_file)?;
         if !real_wasm_path.exists() {
             anyhow::bail!("WASM file '{}' not found in sandbox jail", wasm_file);
         }
 
         let wasm_bytes = tokio::fs::read(&real_wasm_path).await?;
-        
+
         let engine = wasmi::Engine::default();
         let module = wasmi::Module::new(&engine, &mut &wasm_bytes[..])
             .map_err(|e| anyhow::anyhow!("Failed to compile WASM module: {}", e))?;
-        
+
         let mut store = wasmi::Store::new(&engine, ());
         let linker = wasmi::Linker::new(&engine);
-        
-        let instance = linker.instantiate(&mut store, &module)?
-            .start(&mut store)?;
-            
+
+        let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
+
         if let Ok(func) = instance.get_typed_func::<(), ()>(&store, "_start") {
             func.call(&mut store, ())?;
         } else if let Ok(func) = instance.get_typed_func::<(), ()>(&store, "main") {
@@ -382,7 +405,7 @@ impl SandboxBackend for WasmSandbox {
                 anyhow::bail!("No executable parameterless function found in WASM module");
             }
         }
-        
+
         Ok(CommandResult {
             exit_code: 0,
             stdout: "WASM module executed successfully in sandbox.".to_string(),
@@ -508,8 +531,13 @@ pub fn resolve_and_validate_path(base_dir: &Path, user_path: &str) -> Result<Pat
     }
 
     // Canonicalize base_dir so symlinks are correctly evaluated
-    let canonical_base = base_dir.canonicalize()
-        .map_err(|e| anyhow::anyhow!("Failed to canonicalize base directory '{}': {}", base_dir.display(), e))?;
+    let canonical_base = base_dir.canonicalize().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to canonicalize base directory '{}': {}",
+            base_dir.display(),
+            e
+        )
+    })?;
 
     // Canonicalize target (handling non-existing suffix components)
     let canonical_target = if normalized.exists() {
@@ -591,11 +619,17 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         let path_str = file_path.to_str().unwrap();
 
-        sandbox.write_file(path_str, "sandbox test content").await.unwrap();
+        sandbox
+            .write_file(path_str, "sandbox test content")
+            .await
+            .unwrap();
         let content = sandbox.read_file(path_str).await.unwrap();
         assert_eq!(content, "sandbox test content");
 
-        let listing = sandbox.list_dir(dir.path().to_str().unwrap(), 1).await.unwrap();
+        let listing = sandbox
+            .list_dir(dir.path().to_str().unwrap(), 1)
+            .await
+            .unwrap();
         assert!(listing.contains("test.txt"));
     }
 
@@ -603,7 +637,7 @@ mod tests {
     fn test_docker_sandbox_path_translation() {
         let sandbox = DockerSandbox::new();
         let current_dir = std::env::current_dir().unwrap();
-        
+
         // Relative path
         let rel = sandbox.translate_path("src/lib.rs").unwrap();
         assert_eq!(rel, current_dir.join("src/lib.rs"));
@@ -629,23 +663,20 @@ mod tests {
     async fn test_wasm_sandbox_execution() {
         let sandbox = WasmSandbox::new();
         let _ = std::fs::create_dir_all(&sandbox.jail_dir);
-        
+
         let wasm_bytes = [
-            0x00, 0x61, 0x73, 0x6d,
-            0x01, 0x00, 0x00, 0x00,
-            0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
-            0x03, 0x02, 0x01, 0x00,
-            0x07, 0x08, 0x01, 0x04, 0x6d, 0x61, 0x69, 0x6e, 0x00, 0x00,
-            0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b
+            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+            0x03, 0x02, 0x01, 0x00, 0x07, 0x08, 0x01, 0x04, 0x6d, 0x61, 0x69, 0x6e, 0x00, 0x00,
+            0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
         ];
-        
+
         let wasm_file_path = sandbox.jail_dir.join("test_module.wasm");
         tokio::fs::write(&wasm_file_path, wasm_bytes).await.unwrap();
-        
+
         let res = sandbox.execute_command("test_module.wasm").await.unwrap();
         assert_eq!(res.exit_code, 0);
         assert!(res.stdout.contains("executed successfully"));
-        
+
         let _ = tokio::fs::remove_file(wasm_file_path).await;
     }
 }

@@ -1,13 +1,13 @@
-use anyhow::Result;
-use crate::tools::builtins;
 use crate::config;
 use crate::core::context;
-use crate::tools::mcp;
+use crate::memory::skills;
 use crate::model;
 use crate::model::registry as model_registry;
-use crate::tools::sandbox;
-use crate::memory::skills;
 use crate::tools;
+use crate::tools::builtins;
+use crate::tools::mcp;
+use crate::tools::sandbox;
+use anyhow::Result;
 
 pub fn print_banner(
     config: &config::AppConfig,
@@ -17,9 +17,9 @@ pub fn print_banner(
     context_limit: usize,
     active_skills: &[String],
 ) {
-    use comfy_table::{Table, Cell, CellAlignment, ColumnConstraint, Width, Color, Attribute};
-    use comfy_table::presets::UTF8_BORDERS_ONLY;
     use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+    use comfy_table::presets::UTF8_BORDERS_ONLY;
+    use comfy_table::{Attribute, Cell, CellAlignment, Color, ColumnConstraint, Table, Width};
     use owo_colors::OwoColorize;
 
     let logo_lines = [
@@ -34,7 +34,10 @@ pub fn print_banner(
     println!();
     // Print logo side-by-side with retrieval tuning indicators
     let neural_status = if patterns_count > 0 {
-        format!("{} patterns adapted", patterns_count).green().bold().to_string()
+        format!("{} patterns adapted", patterns_count)
+            .green()
+            .bold()
+            .to_string()
     } else {
         "initialized".dimmed().to_string()
     };
@@ -81,7 +84,9 @@ pub fn print_banner(
 
     // Row 1: Header
     table.add_row(vec![
-        Cell::new("● HELIX CORE ENGINE").fg(Color::Cyan).add_attribute(Attribute::Bold),
+        Cell::new("● HELIX CORE ENGINE")
+            .fg(Color::Cyan)
+            .add_attribute(Attribute::Bold),
         Cell::new("STATUS: ONLINE")
             .fg(Color::Green)
             .add_attribute(Attribute::Bold)
@@ -96,19 +101,29 @@ pub fn print_banner(
 
     // Row 3, 4, 5: Provider, Model, Context Limit, Workspace
     table.add_row(vec![
-        Cell::new("PROVIDER").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("PROVIDER")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(provider).fg(Color::White),
     ]);
     table.add_row(vec![
-        Cell::new("MODEL").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("MODEL")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(model).fg(Color::White),
     ]);
     table.add_row(vec![
-        Cell::new("CONTEXT LIMIT").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
-        Cell::new(&context_str).fg(Color::Cyan).add_attribute(Attribute::Bold),
+        Cell::new("CONTEXT LIMIT")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
+        Cell::new(&context_str)
+            .fg(Color::Cyan)
+            .add_attribute(Attribute::Bold),
     ]);
     table.add_row(vec![
-        Cell::new("WORKSPACE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("WORKSPACE")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&ws).fg(Color::White),
     ]);
 
@@ -120,26 +135,38 @@ pub fn print_banner(
 
     // Row 7, 8, 9: Session ID, Memory Size, Sona State
     table.add_row(vec![
-        Cell::new("SESSION ID").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("SESSION ID")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(session_id).fg(Color::White),
     ]);
     let mem_str = format!("{} documents", memory_size);
     table.add_row(vec![
-        Cell::new("MEMORY SIZE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("MEMORY SIZE")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&mem_str).fg(Color::White),
     ]);
     let sona_str = format!("{} patterns learned", patterns_count);
     table.add_row(vec![
-        Cell::new("SONA STATE").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("SONA STATE")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&sona_str).fg(Color::White),
     ]);
     let skills_str = if active_skills.is_empty() {
         "none loaded".to_string()
     } else {
-        format!("{} loaded ({})", active_skills.len(), active_skills.join(", "))
+        format!(
+            "{} loaded ({})",
+            active_skills.len(),
+            active_skills.join(", ")
+        )
     };
     table.add_row(vec![
-        Cell::new("ACTIVE SKILLS").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("ACTIVE SKILLS")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&skills_str).fg(Color::White),
     ]);
 
@@ -163,7 +190,10 @@ pub fn build_system_prompt(base: &str, skill_reg: &skills::SkillRegistry) -> Str
     format!("{}{}", base, skills_suffix)
 }
 
-pub fn build_tool_registry(sandbox: sandbox::SharedSandbox, skills_dir: std::path::PathBuf) -> tools::ToolRegistry {
+pub fn build_tool_registry(
+    sandbox: sandbox::SharedSandbox,
+    skills_dir: std::path::PathBuf,
+) -> tools::ToolRegistry {
     let mut registry = tools::ToolRegistry::new();
     registry.register(builtins::BashTool::new(sandbox.clone()));
     registry.register(builtins::ReadFileTool::new(sandbox.clone()));
@@ -221,9 +251,9 @@ pub async fn build_context(
 
     tracing::info!(
         model_window,
-        system_tokens  = budget.system_prompt_tokens,
-        tool_tokens    = budget.tool_descriptor_tokens,
-        available      = budget.available_for_messages(),
+        system_tokens = budget.system_prompt_tokens,
+        tool_tokens = budget.tool_descriptor_tokens,
+        available = budget.available_for_messages(),
         "Context budget initialised"
     );
 
@@ -235,12 +265,13 @@ pub fn count_omitted_turns(messages: &[serde_json::Value]) -> usize {
     for msg in messages {
         if let Some(content) = msg.get("content").and_then(|v| v.as_str())
             && content.contains("intermediate turns were omitted")
-                && let Some(part) = content.split("intermediate turns").next()
-                    && let Some(num_str) = part.split(':').next_back()
-                        && let Some(num_only) = num_str.split_whitespace().next()
-                            && let Ok(num) = num_only.parse::<usize>() {
-                                total += num;
-                            }
+            && let Some(part) = content.split("intermediate turns").next()
+            && let Some(num_str) = part.split(':').next_back()
+            && let Some(num_only) = num_str.split_whitespace().next()
+            && let Ok(num) = num_only.parse::<usize>()
+        {
+            total += num;
+        }
     }
     total
 }
@@ -248,15 +279,17 @@ pub fn count_omitted_turns(messages: &[serde_json::Value]) -> usize {
 pub fn load_sona_state(data_dir: &std::path::Path, sona: &ruvector_sona::SonaEngine) {
     let state_path = data_dir.join("sona_state.json");
     if state_path.exists()
-        && let Ok(json) = std::fs::read_to_string(&state_path) {
-            let _ = sona.coordinator().load_state(&json);
-        }
+        && let Ok(json) = std::fs::read_to_string(&state_path)
+    {
+        let _ = sona.coordinator().load_state(&json);
+    }
     let weights_path = data_dir.join("sona_weights.json");
     if weights_path.exists()
         && let Ok(json) = std::fs::read_to_string(&weights_path)
-            && let Ok((down, up)) = serde_json::from_str::<(Vec<f32>, Vec<f32>)>(&json) {
-                let _ = sona.coordinator().restore_micro_lora_weights(down, up);
-            }
+        && let Ok((down, up)) = serde_json::from_str::<(Vec<f32>, Vec<f32>)>(&json)
+    {
+        let _ = sona.coordinator().restore_micro_lora_weights(down, up);
+    }
 }
 
 pub fn save_sona_state(data_dir: &std::path::Path, sona: &ruvector_sona::SonaEngine) {
@@ -279,9 +312,9 @@ pub fn print_status_card(
     active_skills: &[String],
     full_diagnostics: bool,
 ) {
-    use comfy_table::{Table, Cell, ColumnConstraint, Width, Color, Attribute};
-    use comfy_table::presets::UTF8_BORDERS_ONLY;
     use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+    use comfy_table::presets::UTF8_BORDERS_ONLY;
+    use comfy_table::{Attribute, Cell, Color, ColumnConstraint, Table, Width};
 
     let mut table = Table::new();
     table.load_preset(UTF8_BORDERS_ONLY);
@@ -294,7 +327,9 @@ pub fn print_status_card(
 
     // Row 1: Header
     table.add_row(vec![
-        Cell::new("HELIX SYSTEM INTEGRATION STATUS").fg(Color::Cyan).add_attribute(Attribute::Bold),
+        Cell::new("HELIX SYSTEM INTEGRATION STATUS")
+            .fg(Color::Cyan)
+            .add_attribute(Attribute::Bold),
         Cell::new(""),
     ]);
 
@@ -306,31 +341,48 @@ pub fn print_status_card(
 
     // Row 3-6: Basic fields
     table.add_row(vec![
-        Cell::new("Session ID").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("Session ID")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(session_id).fg(Color::White),
     ]);
     table.add_row(vec![
-        Cell::new("Active Model").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("Active Model")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(model_name).fg(Color::White),
     ]);
     let mem_str = format!("{} documents", memory_size);
     table.add_row(vec![
-        Cell::new("Memory Size").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("Memory Size")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&mem_str).fg(Color::White),
     ]);
-    let patterns_count = sona.as_ref().map(|s| s.stats().patterns_stored).unwrap_or(0);
+    let patterns_count = sona
+        .as_ref()
+        .map(|s| s.stats().patterns_stored)
+        .unwrap_or(0);
     let sona_str = format!("{} patterns learned", patterns_count);
     table.add_row(vec![
-        Cell::new("SONA State").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("SONA State")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&sona_str).fg(Color::White),
     ]);
     let skills_str = if active_skills.is_empty() {
         "none loaded".to_string()
     } else {
-        format!("{} loaded ({})", active_skills.len(), active_skills.join(", "))
+        format!(
+            "{} loaded ({})",
+            active_skills.len(),
+            active_skills.join(", ")
+        )
     };
     table.add_row(vec![
-        Cell::new("Active Skills").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("Active Skills")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(&skills_str).fg(Color::White),
     ]);
 
@@ -343,7 +395,9 @@ pub fn print_status_card(
 
         // Row 8: Section Header
         table.add_row(vec![
-            Cell::new("OPTIMIZATION & RETRIEVAL TUNING DIAGNOSTICS").fg(Color::Cyan).add_attribute(Attribute::Bold),
+            Cell::new("OPTIMIZATION & RETRIEVAL TUNING DIAGNOSTICS")
+                .fg(Color::Cyan)
+                .add_attribute(Attribute::Bold),
             Cell::new(""),
         ]);
 
@@ -354,30 +408,40 @@ pub fn print_status_card(
         ]);
 
         let ewc_tasks = sona.as_ref().map(|s| s.stats().ewc_tasks).unwrap_or(0);
-        let buf_rate = sona.as_ref().map(|s| s.stats().buffer_success_rate * 100.0).unwrap_or(0.0);
+        let buf_rate = sona
+            .as_ref()
+            .map(|s| s.stats().buffer_success_rate * 100.0)
+            .unwrap_or(0.0);
         let consolidation = format!("{} tasks, {:.1}% buffer success", ewc_tasks, buf_rate);
         table.add_row(vec![
-            Cell::new("Consolidation").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new("Consolidation")
+                .fg(Color::DarkGrey)
+                .add_attribute(Attribute::Bold),
             Cell::new(&consolidation).fg(Color::White),
         ]);
 
         let lambda = sona.as_ref().map(|s| s.config().ewc_lambda).unwrap_or(0.0);
         let lambda_str = format!("{:.1}", lambda);
         table.add_row(vec![
-            Cell::new("EWC Lambda").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new("EWC Lambda")
+                .fg(Color::DarkGrey)
+                .add_attribute(Attribute::Bold),
             Cell::new(&lambda_str).fg(Color::White),
         ]);
 
-        let micro_rank = sona.as_ref().map(|s| s.config().micro_lora_rank).unwrap_or(0);
+        let micro_rank = sona
+            .as_ref()
+            .map(|s| s.config().micro_lora_rank)
+            .unwrap_or(0);
         let micro_dim = sona.as_ref().map(|s| s.config().hidden_dim).unwrap_or(0);
         let micro_params = micro_dim * micro_rank * 2;
         let micro_status = format!("Rank {}, {} active params", micro_rank, micro_params);
         table.add_row(vec![
-            Cell::new("Micro-LoRA").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new("Micro-LoRA")
+                .fg(Color::DarkGrey)
+                .add_attribute(Attribute::Bold),
             Cell::new(&micro_status).fg(Color::White),
         ]);
-
-
     }
 
     println!("{table}");
@@ -402,12 +466,16 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
         .collect()
 }
 
-pub fn confirm_agent_action(tool_name: &str, description: &str, details: Option<&str>) -> Result<bool> {
-    use comfy_table::{Table, Cell, Color, Attribute, ColumnConstraint, Width};
-    use comfy_table::presets::UTF8_BORDERS_ONLY;
+pub fn confirm_agent_action(
+    tool_name: &str,
+    description: &str,
+    details: Option<&str>,
+) -> Result<bool> {
     use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-    use dialoguer::Confirm;
+    use comfy_table::presets::UTF8_BORDERS_ONLY;
+    use comfy_table::{Attribute, Cell, Color, ColumnConstraint, Table, Width};
     use console::style;
+    use dialoguer::Confirm;
 
     println!();
     let mut table = Table::new();
@@ -437,13 +505,17 @@ pub fn confirm_agent_action(tool_name: &str, description: &str, details: Option<
     ]);
 
     table.add_row(vec![
-        Cell::new("Action Details").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+        Cell::new("Action Details")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
         Cell::new(description).fg(Color::White),
     ]);
 
     if let Some(det) = details {
         table.add_row(vec![
-            Cell::new("Target/Payload").fg(Color::DarkGrey).add_attribute(Attribute::Bold),
+            Cell::new("Target/Payload")
+                .fg(Color::DarkGrey)
+                .add_attribute(Attribute::Bold),
             Cell::new(det).fg(Color::Cyan),
         ]);
     }

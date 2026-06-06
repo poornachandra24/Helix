@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::{ApiFormat, AppConfig, Provider};
@@ -83,7 +83,7 @@ impl OpenAiCompatibleAdapter {
     fn endpoint(&self, provider_base: &str, format: &ApiFormat) -> String {
         match format {
             ApiFormat::OpenAiCompatible => format!("{}/chat/completions", provider_base),
-            ApiFormat::OllamaNative     => format!("{}/api/chat", provider_base),
+            ApiFormat::OllamaNative => format!("{}/api/chat", provider_base),
         }
     }
 
@@ -101,26 +101,35 @@ impl OpenAiCompatibleAdapter {
                 let mut msgs = vec![json!({"role": "system", "content": system_prompt})];
                 for m in messages {
                     let mut modified = m.clone();
-                    if let Some(tool_calls) = modified.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                    if let Some(tool_calls) = modified
+                        .get_mut("tool_calls")
+                        .and_then(|v| v.as_array_mut())
+                    {
                         for tc in tool_calls {
                             if let Some(func) = tc.get_mut("function")
                                 && let Some(args) = func.get("arguments")
-                                    && args.is_object() {
-                                        func["arguments"] = json!(args.to_string());
-                                    }
+                                && args.is_object()
+                            {
+                                func["arguments"] = json!(args.to_string());
+                            }
                         }
                     }
                     msgs.push(modified);
                 }
 
-                let openai_tools: Vec<Value> = tools.into_iter().map(|t| json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
-                })).collect();
+                let openai_tools: Vec<Value> = tools
+                    .into_iter()
+                    .map(|t| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            }
+                        })
+                    })
+                    .collect();
 
                 let mut payload = json!({
                     "model":       self.config.active_model,
@@ -147,7 +156,13 @@ impl OpenAiCompatibleAdapter {
                         payload["thinking_config"] = json!({ "thinking_budget": 16384 });
                     } else if let Ok(budget) = level.parse::<u64>() {
                         payload["thinking_config"] = json!({ "thinking_budget": budget });
-                        let effort = if budget < 2048 { "low" } else if budget < 8192 { "medium" } else { "high" };
+                        let effort = if budget < 2048 {
+                            "low"
+                        } else if budget < 8192 {
+                            "medium"
+                        } else {
+                            "high"
+                        };
                         payload["reasoning_effort"] = json!(effort);
                     }
                 }
@@ -158,27 +173,37 @@ impl OpenAiCompatibleAdapter {
                 let mut msgs = vec![json!({"role": "system", "content": system_prompt})];
                 for m in messages {
                     let mut modified = m.clone();
-                    if let Some(tool_calls) = modified.get_mut("tool_calls").and_then(|v| v.as_array_mut()) {
+                    if let Some(tool_calls) = modified
+                        .get_mut("tool_calls")
+                        .and_then(|v| v.as_array_mut())
+                    {
                         for tc in tool_calls {
                             if let Some(func) = tc.get_mut("function")
-                                && let Some(args_str) = func.get("arguments").and_then(|v| v.as_str())
-                                    && let Ok(obj) = serde_json::from_str::<Value>(args_str) {
-                                        func["arguments"] = obj;
-                                    }
+                                && let Some(args_str) =
+                                    func.get("arguments").and_then(|v| v.as_str())
+                                && let Ok(obj) = serde_json::from_str::<Value>(args_str)
+                            {
+                                func["arguments"] = obj;
+                            }
                         }
                     }
                     msgs.push(modified);
                 }
 
                 // Ollama native tool format mirrors OpenAI's tool schema
-                let ollama_tools: Vec<Value> = tools.into_iter().map(|t| json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
-                })).collect();
+                let ollama_tools: Vec<Value> = tools
+                    .into_iter()
+                    .map(|t| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            }
+                        })
+                    })
+                    .collect();
 
                 let mut payload = json!({
                     "model":    self.config.active_model,
@@ -189,7 +214,9 @@ impl OpenAiCompatibleAdapter {
                 });
 
                 let active_level = self.thinking_level.read().ok().and_then(|r| r.clone());
-                if let (Some(level), Some(opts)) = (&active_level, payload["options"].as_object_mut()) {
+                if let (Some(level), Some(opts)) =
+                    (&active_level, payload["options"].as_object_mut())
+                {
                     let level_lower = level.to_lowercase();
                     if level_lower == "off" || level_lower == "disabled" {
                         opts.insert("thinking_budget".to_string(), json!(0));
@@ -212,7 +239,8 @@ impl OpenAiCompatibleAdapter {
     /// Parse a complete (non-streaming) response from either format.
     fn parse_response(&self, resp: &Value, format: &ApiFormat) -> Result<ModelResponse> {
         if let Some(err) = resp.get("error") {
-            let msg = err["message"].as_str()
+            let msg = err["message"]
+                .as_str()
                 .or_else(|| err.as_str())
                 .unwrap_or("unknown API error");
             anyhow::bail!("API error: {}", msg);
@@ -220,40 +248,43 @@ impl OpenAiCompatibleAdapter {
 
         let message = match format {
             ApiFormat::OpenAiCompatible => &resp["choices"][0]["message"],
-            ApiFormat::OllamaNative     => &resp["message"],
+            ApiFormat::OllamaNative => &resp["message"],
         };
 
         // ── Tool calls ────────────────────────────────────────────
         if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array())
-            && !tool_calls.is_empty() {
-                let mut calls = Vec::new();
-                for tc in tool_calls {
-                    let func = &tc["function"];
-                    
-                    let args = if let Some(args_str) = func["arguments"].as_str() {
-                        match serde_json::from_str::<Value>(args_str) {
-                            Ok(v) => v,
-                            Err(e) => return Ok(ModelResponse::ParseError {
+            && !tool_calls.is_empty()
+        {
+            let mut calls = Vec::new();
+            for tc in tool_calls {
+                let func = &tc["function"];
+
+                let args = if let Some(args_str) = func["arguments"].as_str() {
+                    match serde_json::from_str::<Value>(args_str) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return Ok(ModelResponse::ParseError {
                                 raw_text: args_str.to_string(),
                                 error: format!("Failed to parse tool args: {}", e),
-                            }),
+                            });
                         }
-                    } else if func["arguments"].is_object() {
-                        func["arguments"].clone()
-                    } else {
-                        json!({})
-                    };
+                    }
+                } else if func["arguments"].is_object() {
+                    func["arguments"].clone()
+                } else {
+                    json!({})
+                };
 
-                    calls.push(ToolCall {
-                        id:   tc["id"].as_str().unwrap_or("0").to_string(),
-                        name: func["name"].as_str().unwrap_or("").to_string(),
-                        args,
-                    });
-                }
-                if !calls.is_empty() {
-                    return Ok(ModelResponse::ToolCalls(calls));
-                }
+                calls.push(ToolCall {
+                    id: tc["id"].as_str().unwrap_or("0").to_string(),
+                    name: func["name"].as_str().unwrap_or("").to_string(),
+                    args,
+                });
             }
+            if !calls.is_empty() {
+                return Ok(ModelResponse::ToolCalls(calls));
+            }
+        }
 
         // ── Text content ──────────────────────────────────────────
         let text = message["content"].as_str().unwrap_or("").to_string();
@@ -278,7 +309,8 @@ impl OpenAiCompatibleAdapter {
         match serde_json::from_str::<Value>(json_str) {
             Ok(parsed) => {
                 let name = parsed.get("name")?.as_str()?.to_string();
-                let args = parsed.get("arguments")
+                let args = parsed
+                    .get("arguments")
                     .or_else(|| parsed.get("args"))
                     .cloned()
                     .unwrap_or_else(|| json!({}));
@@ -324,7 +356,8 @@ impl OpenAiCompatibleAdapter {
 
         // Extract error
         if let Some(err) = parsed.get("error") {
-            let msg = err["message"].as_str()
+            let msg = err["message"]
+                .as_str()
                 .or_else(|| err.as_str())
                 .unwrap_or("unknown API error");
             anyhow::bail!("API error in stream: {}", msg);
@@ -333,39 +366,41 @@ impl OpenAiCompatibleAdapter {
         match format {
             ApiFormat::OpenAiCompatible => {
                 if let Some(choices) = parsed.get("choices").and_then(|v| v.as_array())
-                    && !choices.is_empty() {
-                        let delta = &choices[0]["delta"];
-                        
-                        // Text content
-                        if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
-                            full_text.push_str(content);
-                            if let Some(tx) = stream_tx {
-                                let _ = tx.send(content.to_string());
-                            }
-                        }
+                    && !choices.is_empty()
+                {
+                    let delta = &choices[0]["delta"];
 
-                        // Tool calls
-                        if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                            for tc in tool_calls {
-                                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                                if idx >= acc_tool_calls.len() {
-                                    acc_tool_calls.resize(idx + 1, AccumulatedToolCall::default());
+                    // Text content
+                    if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+                        full_text.push_str(content);
+                        if let Some(tx) = stream_tx {
+                            let _ = tx.send(content.to_string());
+                        }
+                    }
+
+                    // Tool calls
+                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                        for tc in tool_calls {
+                            let idx =
+                                tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                            if idx >= acc_tool_calls.len() {
+                                acc_tool_calls.resize(idx + 1, AccumulatedToolCall::default());
+                            }
+
+                            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                                acc_tool_calls[idx].id = Some(id.to_string());
+                            }
+                            if let Some(func) = tc.get("function") {
+                                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                                    acc_tool_calls[idx].name = Some(name.to_string());
                                 }
-                                
-                                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                    acc_tool_calls[idx].id = Some(id.to_string());
-                                }
-                                if let Some(func) = tc.get("function") {
-                                    if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                                        acc_tool_calls[idx].name = Some(name.to_string());
-                                    }
-                                    if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                                        acc_tool_calls[idx].arguments.push_str(args);
-                                    }
+                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                    acc_tool_calls[idx].arguments.push_str(args);
                                 }
                             }
                         }
                     }
+                }
             }
             ApiFormat::OllamaNative => {
                 let message = &parsed["message"];
@@ -385,8 +420,12 @@ impl OpenAiCompatibleAdapter {
                         } else {
                             args_val.to_string()
                         };
-                        let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                        
+                        let id = tc
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
                         acc_tool_calls.push(AccumulatedToolCall {
                             id: Some(id),
                             name: Some(name),
@@ -399,7 +438,6 @@ impl OpenAiCompatibleAdapter {
 
         Ok(())
     }
-
 }
 
 #[derive(Default, Clone)]
@@ -475,7 +513,13 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                         let line = String::from_utf8_lossy(&line_buf).to_string();
                         line_buf.clear();
                         if !line.trim().is_empty() {
-                            self.process_stream_line(&line, format, &mut full_text, &mut acc_tool_calls, &stream_tx)?;
+                            self.process_stream_line(
+                                &line,
+                                format,
+                                &mut full_text,
+                                &mut acc_tool_calls,
+                                &stream_tx,
+                            )?;
                         }
                     } else {
                         line_buf.push(byte);
@@ -485,7 +529,13 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
             if !line_buf.is_empty() {
                 let line = String::from_utf8_lossy(&line_buf).to_string();
                 if !line.trim().is_empty() {
-                    self.process_stream_line(&line, format, &mut full_text, &mut acc_tool_calls, &stream_tx)?;
+                    self.process_stream_line(
+                        &line,
+                        format,
+                        &mut full_text,
+                        &mut acc_tool_calls,
+                        &stream_tx,
+                    )?;
                 }
             }
 
@@ -538,8 +588,12 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         }
     }
 
-    fn provider_name(&self) -> &str { &self.config.active_provider }
-    fn model_name(&self)    -> &str { &self.config.active_model }
+    fn provider_name(&self) -> &str {
+        &self.config.active_provider
+    }
+    fn model_name(&self) -> &str {
+        &self.config.active_model
+    }
     fn set_thinking_level(&self, level: Option<String>) {
         if let Ok(mut w) = self.thinking_level.write() {
             *w = level;

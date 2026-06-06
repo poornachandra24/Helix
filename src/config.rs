@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use dialoguer::{theme::ColorfulTheme, Input, Password, Select};
+use dialoguer::{Input, Password, Select, theme::ColorfulTheme};
 use directories::ProjectDirs;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,11 @@ impl fmt::Display for Provider {
             Some(k) if !k.is_empty() => format!(" [key: {}***]", &k[..k.len().min(4)]),
             _ => " [no key]".to_string(),
         };
-        write!(f, "{} → {} ({}){}", self.name, self.base_url, self.api_format, key_hint)
+        write!(
+            f,
+            "{} → {} ({}){}",
+            self.name, self.base_url, self.api_format, key_hint
+        )
     }
 }
 
@@ -65,7 +69,6 @@ pub struct AppConfig {
     pub thinking_level: Option<String>,
 }
 
-
 impl AppConfig {
     #[allow(dead_code)]
     pub fn get_active_provider(&self) -> Result<Provider> {
@@ -79,15 +82,22 @@ impl AppConfig {
     pub async fn resolve_best_provider(&self, client: &Client) -> Provider {
         // 1. If active_provider is not "auto", try to get it.
         if self.active_provider != "auto"
-            && let Some(p) = self.providers.iter().find(|p| p.name == self.active_provider) {
-                tracing::info!("Probing active provider '{}' ({})", p.name, p.base_url);
-                if check_provider_health(client, p).await {
-                    return p.clone();
-                } else {
-                    tracing::warn!("Active provider '{}' is offline. Proceeding anyway...", p.name);
-                    return p.clone();
-                }
+            && let Some(p) = self
+                .providers
+                .iter()
+                .find(|p| p.name == self.active_provider)
+        {
+            tracing::info!("Probing active provider '{}' ({})", p.name, p.base_url);
+            if check_provider_health(client, p).await {
+                return p.clone();
+            } else {
+                tracing::warn!(
+                    "Active provider '{}' is offline. Proceeding anyway...",
+                    p.name
+                );
+                return p.clone();
             }
+        }
 
         // 2. We are in "auto" mode. Probe all configured providers to find the best online candidate.
         let mut candidates = Vec::new();
@@ -100,7 +110,11 @@ impl AppConfig {
 
         if candidates.is_empty() {
             // Absolutely everything is offline, fall back to active_provider config if possible
-            if let Some(p) = self.providers.iter().find(|p| p.name == self.active_provider) {
+            if let Some(p) = self
+                .providers
+                .iter()
+                .find(|p| p.name == self.active_provider)
+            {
                 return p.clone();
             }
             if !self.providers.is_empty() {
@@ -149,10 +163,14 @@ impl AppConfig {
 
 pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool {
     let url = match provider.api_format {
-        ApiFormat::OpenAiCompatible => format!("{}/models", provider.base_url.trim_end_matches('/')),
-        ApiFormat::OllamaNative     => format!("{}/api/tags", provider.base_url.trim_end_matches('/')),
+        ApiFormat::OpenAiCompatible => {
+            format!("{}/models", provider.base_url.trim_end_matches('/'))
+        }
+        ApiFormat::OllamaNative => format!("{}/api/tags", provider.base_url.trim_end_matches('/')),
     };
-    let mut req = client.get(&url).timeout(std::time::Duration::from_millis(800));
+    let mut req = client
+        .get(&url)
+        .timeout(std::time::Duration::from_millis(800));
     if let Some(key) = &provider.api_key {
         req = req.bearer_auth(key);
     }
@@ -173,7 +191,10 @@ pub fn get_config_dir() -> Result<PathBuf> {
 pub fn get_state_dir() -> Result<PathBuf> {
     let proj_dirs = ProjectDirs::from("com", "harness", "harness-cli")
         .context("Could not determine state directory")?;
-    Ok(proj_dirs.state_dir().unwrap_or_else(|| proj_dirs.data_dir()).to_path_buf())
+    Ok(proj_dirs
+        .state_dir()
+        .unwrap_or_else(|| proj_dirs.data_dir())
+        .to_path_buf())
 }
 
 pub fn get_data_dir() -> Result<PathBuf> {
@@ -196,15 +217,69 @@ pub fn load_config() -> Result<AppConfig> {
 
 /// Provider templates: (display name, base_url, api_key_required, default_model, format)
 const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
-    ("Ollama (Local)",              "http://localhost:11434", false, "qwen3:4b",           ApiFormat::OllamaNative),
-    ("Ollama Cloud",                "https://ollama.com",     true,  "gpt-oss:120b-cloud", ApiFormat::OllamaNative),
-    ("Groq",                        "https://api.groq.com/openai/v1", true, "llama3-8b-8192", ApiFormat::OpenAiCompatible),
-    ("OpenAI",                      "https://api.openai.com/v1", true, "gpt-4o",          ApiFormat::OpenAiCompatible),
-    ("vLLM (Local)",                "http://localhost:8000/v1", false, "meta-llama/Llama-3-8b", ApiFormat::OpenAiCompatible),
-    ("Gemini",                      "https://generativelanguage.googleapis.com/v1beta/openai", true, "gemini-1.5-flash", ApiFormat::OpenAiCompatible),
-    ("Anthropic (via LiteLLM proxy)", "http://localhost:4000/v1", false, "claude-3-haiku-20240307", ApiFormat::OpenAiCompatible),
-    ("Custom (OpenAI-compatible)",  "", false, "", ApiFormat::OpenAiCompatible),
-    ("Custom (Ollama native)",      "", false, "", ApiFormat::OllamaNative),
+    (
+        "Ollama (Local)",
+        "http://localhost:11434",
+        false,
+        "qwen3:4b",
+        ApiFormat::OllamaNative,
+    ),
+    (
+        "Ollama Cloud",
+        "https://ollama.com",
+        true,
+        "gpt-oss:120b-cloud",
+        ApiFormat::OllamaNative,
+    ),
+    (
+        "Groq",
+        "https://api.groq.com/openai/v1",
+        true,
+        "llama3-8b-8192",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "OpenAI",
+        "https://api.openai.com/v1",
+        true,
+        "gpt-4o",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "vLLM (Local)",
+        "http://localhost:8000/v1",
+        false,
+        "meta-llama/Llama-3-8b",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "Gemini",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        true,
+        "gemini-1.5-flash",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "Anthropic (via LiteLLM proxy)",
+        "http://localhost:4000/v1",
+        false,
+        "claude-3-haiku-20240307",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "Custom (OpenAI-compatible)",
+        "",
+        false,
+        "",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "Custom (Ollama native)",
+        "",
+        false,
+        "",
+        ApiFormat::OllamaNative,
+    ),
 ];
 
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
@@ -234,7 +309,11 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
             .with_prompt(format!("API Key for {} (Enter to skip)", name))
             .allow_empty_password(true)
             .interact()?;
-        if key.trim().is_empty() { None } else { Some(key) }
+        if key.trim().is_empty() {
+            None
+        } else {
+            Some(key)
+        }
     };
 
     let model_name: String = Input::with_theme(&ColorfulTheme::default())
@@ -270,7 +349,11 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
 }
 
 /// Switch to a pre-configured provider by name (no password re-entry).
-pub fn switch_provider(config: &mut AppConfig, provider_name: &str, model: Option<&str>) -> Result<()> {
+pub fn switch_provider(
+    config: &mut AppConfig,
+    provider_name: &str,
+    model: Option<&str>,
+) -> Result<()> {
     if provider_name.eq_ignore_ascii_case("auto") {
         config.active_provider = "auto".to_string();
         if let Some(m) = model {
@@ -279,7 +362,10 @@ pub fn switch_provider(config: &mut AppConfig, provider_name: &str, model: Optio
         config.save()?;
         return Ok(());
     }
-    let found = config.providers.iter().find(|p| p.name.eq_ignore_ascii_case(provider_name));
+    let found = config
+        .providers
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(provider_name));
     match found {
         Some(p) => {
             config.active_provider = p.name.clone();
@@ -292,7 +378,12 @@ pub fn switch_provider(config: &mut AppConfig, provider_name: &str, model: Optio
         None => anyhow::bail!(
             "Provider '{}' not found. Available: {}",
             provider_name,
-            config.providers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+            config
+                .providers
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
 }

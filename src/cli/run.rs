@@ -5,14 +5,14 @@ use tokio::sync::mpsc;
 
 use crate::config;
 use crate::core::engine;
-use crate::memory;
 use crate::core::persistence;
-use crate::tools::sandbox;
+use crate::memory;
 use crate::memory::skills;
+use crate::tools::sandbox;
 
 use super::helpers::{
-    build_context, build_model, build_system_prompt, build_tool_registry,
-    init_mcp_tools, load_sona_state, save_sona_state,
+    build_context, build_model, build_system_prompt, build_tool_registry, init_mcp_tools,
+    load_sona_state, save_sona_state,
 };
 
 pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()> {
@@ -33,7 +33,13 @@ pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()
         3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.";
     let system_prompt = build_system_prompt(base_system, &skill_reg);
     let lookup_client = crate::model::registry::build_lookup_client();
-    let context = build_context(app_config, &system_prompt, &tools.descriptors(), &lookup_client).await;
+    let context = build_context(
+        app_config,
+        &system_prompt,
+        &tools.descriptors(),
+        &lookup_client,
+    )
+    .await;
     let model = build_model(app_config);
     let session = persistence::Session::new(None)?;
 

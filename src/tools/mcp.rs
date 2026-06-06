@@ -1,18 +1,18 @@
+use crate::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
+use rmcp::{
+    Peer,
+    model::{CallToolRequestParams, RawContent, ResourceContents},
+    serve_client,
+    service::{RoleClient, RunningService},
+    transport::TokioChildProcess,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
-use rmcp::{
-    serve_client,
-    service::{RoleClient, RunningService},
-    transport::TokioChildProcess,
-    Peer,
-    model::{CallToolRequestParams, RawContent, ResourceContents},
-};
-use crate::tools::Tool;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,7 +106,9 @@ impl Default for McpRegistry {
 
 impl McpRegistry {
     pub fn new() -> Self {
-        Self { services: Vec::new() }
+        Self {
+            services: Vec::new(),
+        }
     }
 
     /// Load config from a file, spawn servers, and return wrapped tools.
@@ -134,13 +136,17 @@ impl McpRegistry {
                             let peer = running_service.peer().clone();
                             match peer.list_all_tools().await {
                                 Ok(tools) => {
-                                    let req_confirm = server_config.requires_confirmation.unwrap_or(false);
+                                    let req_confirm =
+                                        server_config.requires_confirmation.unwrap_or(false);
                                     for t in tools {
                                         // Convert rmcp tool fields to serde_json::Value
                                         let schema_val = serde_json::to_value(&t.input_schema)?;
                                         wrapped_tools.push(McpWrappedTool {
                                             name: t.name.to_string(),
-                                            description: t.description.unwrap_or_default().to_string(),
+                                            description: t
+                                                .description
+                                                .unwrap_or_default()
+                                                .to_string(),
                                             input_schema: schema_val,
                                             peer: peer.clone(),
                                             requires_confirmation: req_confirm,
@@ -150,17 +156,26 @@ impl McpRegistry {
                                     self.services.push(running_service);
                                 }
                                 Err(e) => {
-                                    eprintln!("⚠️  [MCP] Failed to list tools for server '{}': {}", name, e);
+                                    eprintln!(
+                                        "⚠️  [MCP] Failed to list tools for server '{}': {}",
+                                        name, e
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("⚠️  [MCP] Failed to serve client handshake for server '{}': {}", name, e);
+                            eprintln!(
+                                "⚠️  [MCP] Failed to serve client handshake for server '{}': {}",
+                                name, e
+                            );
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("⚠️  [MCP] Failed to spawn child process for server '{}': {}", name, e);
+                    eprintln!(
+                        "⚠️  [MCP] Failed to spawn child process for server '{}': {}",
+                        name, e
+                    );
                 }
             }
         }

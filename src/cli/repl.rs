@@ -1,29 +1,28 @@
 use anyhow::Result;
 use console::style;
-use unicode_width::UnicodeWidthStr;
 use owo_colors::OwoColorize;
 use std::io::{self, Write};
-use tokio::sync::mpsc;
 use tokio::io::AsyncBufReadExt;
+use tokio::sync::mpsc;
+use unicode_width::UnicodeWidthStr;
 
 use crate::config;
 use crate::core::context;
 use crate::core::engine;
-use crate::memory;
 use crate::core::metrics;
 use crate::core::persistence;
-use crate::tools::sandbox;
+use crate::memory;
 use crate::memory::skills;
+use crate::tools::sandbox;
 
 use super::helpers::{
-    build_context, build_model, build_system_prompt, build_tool_registry,
-    count_omitted_turns, init_mcp_tools, load_sona_state, print_banner,
-    print_status_card, save_sona_state, wrap_text,
+    build_context, build_model, build_system_prompt, build_tool_registry, count_omitted_turns,
+    init_mcp_tools, load_sona_state, print_banner, print_status_card, save_sona_state, wrap_text,
 };
 
 fn print_help() {
-    use comfy_table::{Table, Cell, ColumnConstraint, Width};
     use comfy_table::presets::NOTHING;
+    use comfy_table::{Cell, ColumnConstraint, Table, Width};
     use owo_colors::OwoColorize;
 
     println!("\n  {}", "HELIX CLI SYSTEM COMMANDS".cyan().bold());
@@ -39,21 +38,38 @@ fn print_help() {
 
     // Section 1
     table.add_row(vec![
-        Cell::new("Core Commands & Session Control:").fg(comfy_table::Color::DarkGrey).add_attribute(comfy_table::Attribute::Bold),
+        Cell::new("Core Commands & Session Control:")
+            .fg(comfy_table::Color::DarkGrey)
+            .add_attribute(comfy_table::Attribute::Bold),
         Cell::new(""),
     ]);
 
     let general = vec![
         ("/help", "show this command guide"),
-        ("/status", "show active model, context budget, SONA & optimization stats"),
+        (
+            "/status",
+            "show active model, context budget, SONA & optimization stats",
+        ),
         ("/clear", "reset current chat history context"),
         ("/config", "reconfigure active provider / model"),
         ("/providers", "list configured API providers"),
-        ("/use <name> [model]", "hot-switch provider/model in the current session"),
+        (
+            "/use <name> [model]",
+            "hot-switch provider/model in the current session",
+        ),
         ("/sessions", "list previous chat sessions"),
-        ("/resume <id>", "load a past session into the active context"),
-        ("/memory [query]", "search/manage semantic memory (use --clear to wipe)"),
-        ("/thinking [level]", "set or show reasoning effort/budget (low, medium, high, off, or tokens)"),
+        (
+            "/resume <id>",
+            "load a past session into the active context",
+        ),
+        (
+            "/memory [query]",
+            "search/manage semantic memory (use --clear to wipe)",
+        ),
+        (
+            "/thinking [level]",
+            "set or show reasoning effort/budget (low, medium, high, off, or tokens)",
+        ),
         ("/exit | /quit", "exit the REPL session"),
     ];
     for (cmd, desc) in general {
@@ -93,8 +109,14 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
     let lookup_client = model_registry_build_lookup_client();
 
     // Dynamically resolve context window from provider APIs / OpenRouter catalogue
-    let context = build_context(&app_config, &system_prompt, &tools.descriptors(), &lookup_client).await;
-    let model   = build_model(&app_config);
+    let context = build_context(
+        &app_config,
+        &system_prompt,
+        &tools.descriptors(),
+        &lookup_client,
+    )
+    .await;
+    let model = build_model(&app_config);
 
     let sona_config = ruvector_sona::SonaConfig {
         hidden_dim: 384,
@@ -113,17 +135,32 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
     // Print combined startup banner with all session details in a single card
     let memory_size = engine.memory.as_ref().map(|m| m.size()).unwrap_or(0);
-    let patterns_count = engine.sona.as_ref().map(|s| s.stats().patterns_stored).unwrap_or(0);
-    print_banner(&app_config, &engine.session.id, memory_size, patterns_count, engine.context.budget.model_window, &active_skills);
+    let patterns_count = engine
+        .sona
+        .as_ref()
+        .map(|s| s.stats().patterns_stored)
+        .unwrap_or(0);
+    print_banner(
+        &app_config,
+        &engine.session.id,
+        memory_size,
+        patterns_count,
+        engine.context.budget.model_window,
+        &active_skills,
+    );
 
     let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
 
     loop {
-        let msg_tokens: usize = engine.global_messages.iter().map(context::TokenEstimator::estimate_message).sum();
+        let msg_tokens: usize = engine
+            .global_messages
+            .iter()
+            .map(context::TokenEstimator::estimate_message)
+            .sum();
         let budget = &engine.context.budget;
         let total_used = msg_tokens + budget.system_prompt_tokens + budget.tool_descriptor_tokens;
         let pct = (total_used as f64 / budget.model_window as f64) * 100.0;
-        
+
         let pct_color = if pct > 85.0 {
             style(format!("{:.1}%", pct)).red().bold()
         } else if pct > 70.0 {
@@ -131,8 +168,12 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         } else {
             style(format!("{:.1}%", pct)).color256(150)
         };
-        
-        print!("\n{} {} ", style(format!("[Ctx: {}]", pct_color)).dimmed(), style(">").bold().blue());
+
+        print!(
+            "\n{} {} ",
+            style(format!("[Ctx: {}]", pct_color)).dimmed(),
+            style(">").bold().blue()
+        );
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -152,8 +193,11 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
         match trimmed {
             "exit" | "quit" | "/exit" | "/quit" => break,
-            "/help"         => { print_help(); continue; }
-            "/clear"        => {
+            "/help" => {
+                print_help();
+                continue;
+            }
+            "/clear" => {
                 engine.global_messages.clear();
                 println!("{}", style("✔ Context cleared.").green());
                 continue;
@@ -170,22 +214,60 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                 );
 
                 let budget = &engine.context.budget;
-                let msg_tokens: usize = engine.global_messages.iter().map(context::TokenEstimator::estimate_message).sum();
+                let msg_tokens: usize = engine
+                    .global_messages
+                    .iter()
+                    .map(context::TokenEstimator::estimate_message)
+                    .sum();
                 let system_tokens = budget.system_prompt_tokens;
                 let tool_tokens = budget.tool_descriptor_tokens;
                 let headroom = budget.response_headroom;
                 let total_used = msg_tokens + system_tokens + tool_tokens;
                 let total_capacity = budget.model_window;
-                let remaining = total_capacity.saturating_sub(total_used).saturating_sub(headroom);
+                let remaining = total_capacity
+                    .saturating_sub(total_used)
+                    .saturating_sub(headroom);
 
-                println!("\n  {}", style("CONTEXT WINDOW BUDGET").bold().color256(111));
+                println!(
+                    "\n  {}",
+                    style("CONTEXT WINDOW BUDGET").bold().color256(111)
+                );
                 println!("  {}", style("─".repeat(50)).color256(240));
-                println!("  {:20}: {} tokens", style("Total Model Window").color256(244), style(total_capacity).color256(117));
-                println!("  {:20}: {} tokens", style("System Prompt Cost").color256(244), style(system_tokens).color256(243));
-                println!("  {:20}: {} tokens", style("Tool Definitions").color256(244), style(tool_tokens).color256(243));
-                println!("  {:20}: {} tokens ({} messages)", style("Active Chat History").color256(244), style(msg_tokens).color256(117), engine.global_messages.len());
-                println!("  {:20}: {} tokens", style("Response Headroom").color256(244), style(headroom).color256(243));
-                println!("  {:20}: {} tokens", style("Remaining Headroom").color256(244), if remaining > 1000 { style(remaining).green().bold() } else { style(remaining).red().bold() });
+                println!(
+                    "  {:20}: {} tokens",
+                    style("Total Model Window").color256(244),
+                    style(total_capacity).color256(117)
+                );
+                println!(
+                    "  {:20}: {} tokens",
+                    style("System Prompt Cost").color256(244),
+                    style(system_tokens).color256(243)
+                );
+                println!(
+                    "  {:20}: {} tokens",
+                    style("Tool Definitions").color256(244),
+                    style(tool_tokens).color256(243)
+                );
+                println!(
+                    "  {:20}: {} tokens ({} messages)",
+                    style("Active Chat History").color256(244),
+                    style(msg_tokens).color256(117),
+                    engine.global_messages.len()
+                );
+                println!(
+                    "  {:20}: {} tokens",
+                    style("Response Headroom").color256(244),
+                    style(headroom).color256(243)
+                );
+                println!(
+                    "  {:20}: {} tokens",
+                    style("Remaining Headroom").color256(244),
+                    if remaining > 1000 {
+                        style(remaining).green().bold()
+                    } else {
+                        style(remaining).red().bold()
+                    }
+                );
 
                 let pct = (total_used as f64 / total_capacity as f64) * 100.0;
                 let width = 25;
@@ -200,7 +282,12 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     style("█".repeat(filled)).color256(150)
                 };
                 let bar = format!("{}{}", bar_color, style("░".repeat(empty)).color256(239));
-                println!("  {:20}: [{}] {:.1}% used", style("Utilization").color256(244), bar, pct);
+                println!(
+                    "  {:20}: [{}] {:.1}% used",
+                    style("Utilization").color256(244),
+                    bar,
+                    pct
+                );
 
                 let omitted_turns = count_omitted_turns(&engine.global_messages);
                 let compaction_events = if let Some(ref m) = engine.metrics {
@@ -209,36 +296,68 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     0
                 };
 
-                println!("\n  {}", style("CONTEXT COMPACTION SUMMARY").bold().color256(111));
+                println!(
+                    "\n  {}",
+                    style("CONTEXT COMPACTION SUMMARY").bold().color256(111)
+                );
                 println!("  {}", style("─".repeat(50)).color256(240));
-                println!("  {:20}: {} triggered", style("Compaction Events").color256(244), style(compaction_events).color256(117));
-                println!("  {:20}: {} intermediate turns discarded", style("Omitted History").color256(244), style(omitted_turns).color256(203));
-
-
+                println!(
+                    "  {:20}: {} triggered",
+                    style("Compaction Events").color256(244),
+                    style(compaction_events).color256(117)
+                );
+                println!(
+                    "  {:20}: {} intermediate turns discarded",
+                    style("Omitted History").color256(244),
+                    style(omitted_turns).color256(203)
+                );
 
                 if let Some(ref m) = engine.metrics {
                     let summary = m.summary();
-                    println!("\n  {}", style("OPTIMIZATION & HEALER METRICS").bold().color256(111));
+                    println!(
+                        "\n  {}",
+                        style("OPTIMIZATION & HEALER METRICS").bold().color256(111)
+                    );
                     println!("  {}", style("─".repeat(50)).color256(240));
-                    println!("  {:20}: {}", style("Total Session Turns").color256(244), style(summary.turn_count).color256(117));
-                    println!("  {:20}: {}", style("Total Healer Retries").color256(244), style(summary.total_healer_retries).color256(117));
+                    println!(
+                        "  {:20}: {}",
+                        style("Total Session Turns").color256(244),
+                        style(summary.turn_count).color256(117)
+                    );
+                    println!(
+                        "  {:20}: {}",
+                        style("Total Healer Retries").color256(244),
+                        style(summary.total_healer_retries).color256(117)
+                    );
                     let success_rate = (1.0 - summary.error_rate) * 100.0;
-                    println!("  {:20}: {:.1}%", style("Healer Success Rate").color256(244), style(success_rate).color256(150));
+                    println!(
+                        "  {:20}: {:.1}%",
+                        style("Healer Success Rate").color256(244),
+                        style(success_rate).color256(150)
+                    );
                 }
                 println!();
 
                 continue;
             }
             "/clear_memory" | "/clear_memories" => {
-                println!("{}", style("💡 Hint: /clear_memory is deprecated. Use `/memory --clear` instead.").yellow());
+                println!(
+                    "{}",
+                    style("💡 Hint: /clear_memory is deprecated. Use `/memory --clear` instead.")
+                        .yellow()
+                );
                 if let Some(ref mut memory_engine) = engine.memory
-                    && let Ok(workspace_dir) = std::env::current_dir() {
-                        let workspace_str = workspace_dir.to_string_lossy().to_string();
-                        match memory_engine.clear_workspace(&workspace_str) {
-                            Ok(()) => println!("{}", style("✔ Workspace memory cleared successfully.").green()),
-                            Err(e) => println!("✘ Error: {}", e),
-                        }
+                    && let Ok(workspace_dir) = std::env::current_dir()
+                {
+                    let workspace_str = workspace_dir.to_string_lossy().to_string();
+                    match memory_engine.clear_workspace(&workspace_str) {
+                        Ok(()) => println!(
+                            "{}",
+                            style("✔ Workspace memory cleared successfully.").green()
+                        ),
+                        Err(e) => println!("✘ Error: {}", e),
                     }
+                }
                 continue;
             }
             _ => {}
@@ -254,56 +373,77 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             };
 
             if is_deprecated {
-                println!("{}", style("💡 Hint: /memories is deprecated. Use `/memory [query]` instead.").yellow());
+                println!(
+                    "{}",
+                    style("💡 Hint: /memories is deprecated. Use `/memory [query]` instead.")
+                        .yellow()
+                );
             }
 
             if let Some(ref mut memory_engine) = engine.memory
-                && let Ok(workspace_dir) = std::env::current_dir() {
-                    let workspace_str = workspace_dir.to_string_lossy().to_string();
-                    if raw_arg == "--clear" {
-                        match memory_engine.clear_workspace(&workspace_str) {
-                            Ok(()) => println!("{}", style("✔ Workspace memory cleared successfully.").green()),
-                            Err(e) => println!("✘ Error: {}", e),
-                        }
-                    } else if raw_arg.is_empty() {
-                        println!("\n{}", style("Recent memories for this workspace:").bold());
-                        let query_res = (|| -> Result<()> {
-                            let mut stmt = memory_engine.db.prepare(
+                && let Ok(workspace_dir) = std::env::current_dir()
+            {
+                let workspace_str = workspace_dir.to_string_lossy().to_string();
+                if raw_arg == "--clear" {
+                    match memory_engine.clear_workspace(&workspace_str) {
+                        Ok(()) => println!(
+                            "{}",
+                            style("✔ Workspace memory cleared successfully.").green()
+                        ),
+                        Err(e) => println!("✘ Error: {}", e),
+                    }
+                } else if raw_arg.is_empty() {
+                    println!("\n{}", style("Recent memories for this workspace:").bold());
+                    let query_res = (|| -> Result<()> {
+                        let mut stmt = memory_engine.db.prepare(
                                 "SELECT text, created_at FROM memory_metadata WHERE workspace_path = ? ORDER BY id DESC LIMIT 5"
                             )?;
-                            let mut rows = stmt.query([&workspace_str])?;
-                            let mut count = 0;
-                            while let Some(row) = rows.next()? {
-                                let text: String = row.get::<_, String>(0)?;
-                                let created_at: String = row.get::<_, String>(1)?;
-                                println!("  {} [{}]", style(text.replace('\n', " ↵ ")).cyan(), style(created_at).dim());
-                                count += 1;
-                            }
-                            if count == 0 {
-                                println!("  No memories recorded yet.");
-                            }
-                            Ok(())
-                        })();
-                        if let Err(e) = query_res {
-                            println!("✘ Error: {}", e);
+                        let mut rows = stmt.query([&workspace_str])?;
+                        let mut count = 0;
+                        while let Some(row) = rows.next()? {
+                            let text: String = row.get::<_, String>(0)?;
+                            let created_at: String = row.get::<_, String>(1)?;
+                            println!(
+                                "  {} [{}]",
+                                style(text.replace('\n', " ↵ ")).cyan(),
+                                style(created_at).dim()
+                            );
+                            count += 1;
                         }
-                    } else {
-                        println!("\nSearching memories for '{}'...", raw_arg);
-                        match memory_engine.search(raw_arg, None, &workspace_str, 5) {
-                            Ok(matches) => {
-                                if matches.is_empty() {
-                                    println!("  No matches found.");
-                                } else {
-                                    for m in matches {
-                                        let file_info = m.file_path.as_ref().map(|p| format!(" (file: {})", p)).unwrap_or_default();
-                                        println!("  {}{} [similarity: {:.2}]", style(m.text.replace('\n', " ↵ ")).cyan(), file_info, m.score);
-                                    }
+                        if count == 0 {
+                            println!("  No memories recorded yet.");
+                        }
+                        Ok(())
+                    })();
+                    if let Err(e) = query_res {
+                        println!("✘ Error: {}", e);
+                    }
+                } else {
+                    println!("\nSearching memories for '{}'...", raw_arg);
+                    match memory_engine.search(raw_arg, None, &workspace_str, 5) {
+                        Ok(matches) => {
+                            if matches.is_empty() {
+                                println!("  No matches found.");
+                            } else {
+                                for m in matches {
+                                    let file_info = m
+                                        .file_path
+                                        .as_ref()
+                                        .map(|p| format!(" (file: {})", p))
+                                        .unwrap_or_default();
+                                    println!(
+                                        "  {}{} [similarity: {:.2}]",
+                                        style(m.text.replace('\n', " ↵ ")).cyan(),
+                                        file_info,
+                                        m.score
+                                    );
                                 }
                             }
-                            Err(e) => println!("✘ Error searching: {}", e),
                         }
+                        Err(e) => println!("✘ Error searching: {}", e),
                     }
                 }
+            }
             continue;
         }
 
@@ -313,9 +453,22 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             app_config = new_config.clone();
             sandbox.set_mode(app_config.sandbox_mode);
             let new_system = build_system_prompt(base_system, &skill_reg);
-            let new_context = build_context(&new_config, &new_system, &engine.tools.descriptors(), &lookup_client).await;
+            let new_context = build_context(
+                &new_config,
+                &new_system,
+                &engine.tools.descriptors(),
+                &lookup_client,
+            )
+            .await;
             engine.update_model(build_model(&new_config), new_context);
-            println!("{}", style(format!("✔ Switched to {} / {}", app_config.active_provider, app_config.active_model)).green());
+            println!(
+                "{}",
+                style(format!(
+                    "✔ Switched to {} / {}",
+                    app_config.active_provider, app_config.active_model
+                ))
+                .green()
+            );
             continue;
         }
 
@@ -323,7 +476,11 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         if trimmed == "/providers" {
             println!("\n{}", style("Saved providers:").bold());
             for p in &app_config.providers {
-                let active = if p.name == app_config.active_provider { " ◀ active" } else { "" };
+                let active = if p.name == app_config.active_provider {
+                    " ◀ active"
+                } else {
+                    ""
+                };
                 println!("  {}{}", style(p).cyan(), style(active).green().bold());
             }
             continue;
@@ -347,7 +504,11 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                         break;
                     } else if rest.as_bytes()[cand_len] == b' ' {
                         let model = rest[cand_len..].trim();
-                        let model_opt = if model.is_empty() { None } else { Some(model.to_string()) };
+                        let model_opt = if model.is_empty() {
+                            None
+                        } else {
+                            Some(model.to_string())
+                        };
                         matched_provider = Some((cand, model_opt));
                         break;
                     }
@@ -355,12 +516,29 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             }
 
             if let Some((provider_name, model_override)) = matched_provider {
-                match config::switch_provider(&mut app_config, &provider_name, model_override.as_deref()) {
+                match config::switch_provider(
+                    &mut app_config,
+                    &provider_name,
+                    model_override.as_deref(),
+                ) {
                     Ok(()) => {
                         sandbox.set_mode(app_config.sandbox_mode);
-                        let new_context = build_context(&app_config, &system_prompt, &engine.tools.descriptors(), &lookup_client).await;
+                        let new_context = build_context(
+                            &app_config,
+                            &system_prompt,
+                            &engine.tools.descriptors(),
+                            &lookup_client,
+                        )
+                        .await;
                         engine.update_model(build_model(&app_config), new_context);
-                        println!("{}", style(format!("✔ Switched to {} / {}", app_config.active_provider, app_config.active_model)).green());
+                        println!(
+                            "{}",
+                            style(format!(
+                                "✔ Switched to {} / {}",
+                                app_config.active_provider, app_config.active_model
+                            ))
+                            .green()
+                        );
                     }
                     Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
                 }
@@ -371,14 +549,30 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     match config::switch_provider(&mut app_config, &active_p, Some(rest)) {
                         Ok(()) => {
                             sandbox.set_mode(app_config.sandbox_mode);
-                            let new_context = build_context(&app_config, &system_prompt, &engine.tools.descriptors(), &lookup_client).await;
+                            let new_context = build_context(
+                                &app_config,
+                                &system_prompt,
+                                &engine.tools.descriptors(),
+                                &lookup_client,
+                            )
+                            .await;
                             engine.update_model(build_model(&app_config), new_context);
-                            println!("{}", style(format!("✔ Switched model to '{}' on active provider '{}'", app_config.active_model, app_config.active_provider)).green());
+                            println!(
+                                "{}",
+                                style(format!(
+                                    "✔ Switched model to '{}' on active provider '{}'",
+                                    app_config.active_model, app_config.active_provider
+                                ))
+                                .green()
+                            );
                         }
                         Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
                     }
                 } else {
-                    println!("{}", style("✘ Usage: /use <provider> [model] OR /use <model>").red());
+                    println!(
+                        "{}",
+                        style("✘ Usage: /use <provider> [model] OR /use <model>").red()
+                    );
                 }
             }
             continue;
@@ -389,8 +583,8 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             match persistence::list_sessions() {
                 Ok(sessions) if sessions.is_empty() => println!("No saved sessions."),
                 Ok(sessions) => {
-                    use comfy_table::{Table, Cell, ColumnConstraint, Width};
                     use comfy_table::presets::NOTHING;
+                    use comfy_table::{Cell, ColumnConstraint, Table, Width};
                     use owo_colors::OwoColorize;
 
                     println!("\n  {}", "Recent sessions (newest first):".cyan().bold());
@@ -406,16 +600,23 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     ]);
 
                     table.add_row(vec![
-                        Cell::new("SESSION ID").fg(comfy_table::Color::DarkGrey).add_attribute(comfy_table::Attribute::Bold),
-                        Cell::new("EVENTS").fg(comfy_table::Color::DarkGrey).add_attribute(comfy_table::Attribute::Bold),
-                        Cell::new("LAST ACTIVE").fg(comfy_table::Color::DarkGrey).add_attribute(comfy_table::Attribute::Bold),
+                        Cell::new("SESSION ID")
+                            .fg(comfy_table::Color::DarkGrey)
+                            .add_attribute(comfy_table::Attribute::Bold),
+                        Cell::new("EVENTS")
+                            .fg(comfy_table::Color::DarkGrey)
+                            .add_attribute(comfy_table::Attribute::Bold),
+                        Cell::new("LAST ACTIVE")
+                            .fg(comfy_table::Color::DarkGrey)
+                            .add_attribute(comfy_table::Attribute::Bold),
                     ]);
 
                     for s in sessions.iter().take(15) {
                         table.add_row(vec![
                             Cell::new(&s.id).fg(comfy_table::Color::Cyan),
                             Cell::new(s.event_count.to_string()).fg(comfy_table::Color::White),
-                            Cell::new(s.modified_at.format("%Y-%m-%d %H:%M").to_string()).fg(comfy_table::Color::White),
+                            Cell::new(s.modified_at.format("%Y-%m-%d %H:%M").to_string())
+                                .fg(comfy_table::Color::White),
                         ]);
                     }
                     println!("{table}");
@@ -435,12 +636,27 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                         match persistence::Session::load_messages(&meta.path) {
                             Ok(msgs) => {
                                 engine.global_messages = msgs;
-                                println!("{}", style(format!("✔ Resumed '{}' ({} messages).", id, engine.global_messages.len())).green());
+                                println!(
+                                    "{}",
+                                    style(format!(
+                                        "✔ Resumed '{}' ({} messages).",
+                                        id,
+                                        engine.global_messages.len()
+                                    ))
+                                    .green()
+                                );
                             }
                             Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
                         }
                     } else {
-                        println!("{}", style(format!("✘ Session '{}' not found. Run /sessions to list.", id)).red());
+                        println!(
+                            "{}",
+                            style(format!(
+                                "✘ Session '{}' not found. Run /sessions to list.",
+                                id
+                            ))
+                            .red()
+                        );
                     }
                 }
                 Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
@@ -453,7 +669,10 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             let arg = trimmed.strip_prefix("/thinking").unwrap_or("").trim();
             if arg.is_empty() {
                 let current = app_config.thinking_level.as_deref().unwrap_or("default");
-                println!("{}", style(format!("Current thinking level: {}", current)).cyan());
+                println!(
+                    "{}",
+                    style(format!("Current thinking level: {}", current)).cyan()
+                );
             } else {
                 let level = match arg.to_lowercase().as_str() {
                     "low" | "medium" | "high" | "off" | "disabled" => {
@@ -475,17 +694,22 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
                 app_config.thinking_level = level.clone();
                 let _ = app_config.save();
-                
+
                 // Hot update the adapter config as well!
                 engine.model.set_thinking_level(level.clone());
 
                 let desc = level.as_deref().unwrap_or("default");
-                println!("{}", style(format!("✔ Thinking level set to: {}", desc)).green());
+                println!(
+                    "{}",
+                    style(format!("✔ Thinking level set to: {}", desc)).green()
+                );
             }
             continue;
         }
 
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
         // ── Normal turn with streaming output ─────────────────
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
@@ -513,14 +737,20 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         print!("  ");
         print!("{}", user_border("╭── "));
         print!("{}", user_header(title));
-        println!("{}", user_border(&format!(" {}╮", "─".repeat(dashes_count))));
+        println!(
+            "{}",
+            user_border(&format!(" {}╮", "─".repeat(dashes_count)))
+        );
         let wrapped_user = wrap_text(trimmed, content_width);
         for line in wrapped_user {
             let expanded_line = line.replace('\t', "    ");
             let padded = format!("  {:width$}  ", expanded_line, width = content_width);
             println!("  {}{}{}", user_pipe, padded, user_pipe);
         }
-        println!("  {}", user_border(&format!("╰{}╯", "─".repeat(content_width + 4))));
+        println!(
+            "  {}",
+            user_border(&format!("╰{}╯", "─".repeat(content_width + 4)))
+        );
 
         // Spawn printer task — handles streaming tokens and interactive spinner
         let printer = tokio::spawn(async move {
@@ -594,7 +824,10 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             let elapsed = start_time.elapsed().as_secs_f32();
             let elapsed_str = format!(" [Elapsed: {:.2}s] ", elapsed);
 
-            let term_height = console::Term::stdout().size_checked().map(|(h, _)| h as usize).unwrap_or(24);
+            let term_height = console::Term::stdout()
+                .size_checked()
+                .map(|(h, _)| h as usize)
+                .unwrap_or(24);
             let is_short_enough = stream_tracker.printed_lines < term_height.saturating_sub(4);
 
             if stream_tracker.printed_lines > 0 && is_short_enough {
@@ -611,10 +844,10 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                 let dashes = (content_width + 4).saturating_sub(l_len);
                 let left_dashes = dashes / 2;
                 let right_dashes = dashes - left_dashes;
-                
+
                 let border_color_fn = |s: &str| s.yellow().to_string();
                 let header_color_fn = |s: &str| s.yellow().bold().to_string();
-                
+
                 let bottom = format!(
                     "  {}{}{}{}{}",
                     border_color_fn("╰"),
@@ -653,16 +886,20 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         }
 
         // Print live context utilization bar
-        let msg_tokens: usize = engine.global_messages.iter().map(context::TokenEstimator::estimate_message).sum();
+        let msg_tokens: usize = engine
+            .global_messages
+            .iter()
+            .map(context::TokenEstimator::estimate_message)
+            .sum();
         let budget = &engine.context.budget;
         let total_used = msg_tokens + budget.system_prompt_tokens + budget.tool_descriptor_tokens;
         let pct = (total_used as f64 / budget.model_window as f64) * 100.0;
-        
+
         let width = 25;
         let filled = ((pct / 100.0) * width as f64).round() as usize;
         let filled = filled.min(width);
         let empty = width - filled;
-        
+
         let bar_color = if pct > 85.0 {
             style("█".repeat(filled)).red()
         } else if pct > 70.0 {
@@ -671,7 +908,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             style("█".repeat(filled)).color256(150)
         };
         let bar = format!("{}{}", bar_color, style("░".repeat(empty)).color256(239));
-        
+
         println!(
             "  {} [{}] {}/{} tokens ({:.1}% used)\n",
             style("Context:").dimmed(),
@@ -683,9 +920,10 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
         // Flush metrics to disk after every turn so /evolve can see them immediately
         if let Some(m) = &engine.metrics
-            && let Ok(state_dir) = config::get_state_dir() {
-                let _ = m.flush_to_disk(&state_dir.join("sessions"));
-            }
+            && let Ok(state_dir) = config::get_state_dir()
+        {
+            let _ = m.flush_to_disk(&state_dir.join("sessions"));
+        }
 
         // Save SONA state after every turn
         if let Some(ref sona) = engine.sona {
@@ -717,10 +955,13 @@ fn print_boxed_response(content_width: usize, full_response: &str, elapsed_str: 
     print!("  ");
     print!("{}", border_color_fn("╭── "));
     print!("{}", header_color_fn(title));
-    println!("{}", border_color_fn(&format!(" {}╮", "─".repeat(dashes_count))));
+    println!(
+        "{}",
+        border_color_fn(&format!(" {}╮", "─".repeat(dashes_count)))
+    );
 
     let pipe = "│".yellow().to_string();
-    
+
     // Render using termimad with default skin
     let skin = termimad::MadSkin::default();
     let fmt_text = termimad::FmtText::from_text(&skin, full_response.into(), Some(content_width));
@@ -772,16 +1013,19 @@ impl StreamTracker {
     fn start(&mut self) {
         let border_color_fn = |s: &str| s.yellow().to_string();
         let header_color_fn = |s: &str| s.yellow().bold().to_string();
-        
+
         let title = "Helix";
         let dashes_count = self.content_width.saturating_sub(title.len());
         print!("  ");
         print!("{}", border_color_fn("╭── "));
         print!("{}", header_color_fn(title));
-        println!("{}", border_color_fn(&format!(" {}╮", "─".repeat(dashes_count))));
-        
+        println!(
+            "{}",
+            border_color_fn(&format!(" {}╮", "─".repeat(dashes_count)))
+        );
+
         self.printed_lines += 1;
-        
+
         print!("  {}  ", self.pipe);
         std::io::stdout().flush().ok();
         self.started = true;
@@ -799,7 +1043,7 @@ impl StreamTracker {
             }
 
             self.current_line.push_str(part);
-            
+
             while self.current_line.width() > self.content_width {
                 let mut last_space_idx = None;
                 let chars: Vec<char> = self.current_line.chars().collect();
@@ -816,7 +1060,7 @@ impl StreamTracker {
                         last_space_idx = Some(idx + 1);
                     }
                 }
-                
+
                 let split_idx = if let Some(space_idx) = last_space_idx {
                     space_idx
                 } else {
@@ -825,11 +1069,11 @@ impl StreamTracker {
 
                 let fit: String = chars[..split_idx].iter().collect();
                 let rem: String = chars[split_idx..].iter().collect();
-                
+
                 print!("\r\x1B[K");
                 println!("  {}  {}", self.pipe, fit);
                 self.printed_lines += 1;
-                
+
                 self.current_line = rem;
                 print!("  {}  ", self.pipe);
             }

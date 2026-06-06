@@ -1,5 +1,5 @@
-use serde_json::{json, Value};
 use crate::tools::ToolDescriptor;
+use serde_json::{Value, json};
 use tiktoken_rs::cl100k_base;
 
 // ──────────────────────────────────────────────
@@ -47,13 +47,16 @@ impl TokenEstimator {
     /// Estimate the token cost of injecting tool schemas into every API call.
     /// Called once at tool-registration time and cached in `ContextBudget`.
     pub fn estimate_tool_descriptors(tools: &[ToolDescriptor]) -> usize {
-        tools.iter().map(|t| {
-            let schema_str = t.parameters.to_string();
-            Self::estimate_text(&t.name)
-                + Self::estimate_text(&t.description)
-                + Self::estimate_text(&schema_str)
-                + 12 // per-tool structural JSON overhead
-        }).sum()
+        tools
+            .iter()
+            .map(|t| {
+                let schema_str = t.parameters.to_string();
+                Self::estimate_text(&t.name)
+                    + Self::estimate_text(&t.description)
+                    + Self::estimate_text(&schema_str)
+                    + 12 // per-tool structural JSON overhead
+            })
+            .sum()
     }
 
     /// Estimate token cost of the system prompt (injected once per call).
@@ -128,7 +131,10 @@ pub struct ContextManager {
 
 impl ContextManager {
     pub fn new(budget: ContextBudget) -> Self {
-        Self { budget, keep_first_n: 1 }
+        Self {
+            budget,
+            keep_first_n: 1,
+        }
     }
 
     /// Compact the message list if total tokens exceed the available budget.
@@ -165,7 +171,9 @@ impl ContextManager {
             }
             recent.push(messages[idx].clone());
             used += cost;
-            if idx == self.keep_first_n { break; }
+            if idx == self.keep_first_n {
+                break;
+            }
             idx -= 1;
         }
 
@@ -231,14 +239,25 @@ mod tests {
         let msg_4 = json!({"role": "user", "content": "reply four"}); // "reply" " four" is 2 tokens => total = 1+2+4 = 7 tokens
 
         // Total for [goal, msg_1, msg_2, msg_3, msg_4] = 6 + 7 + 7 + 7 + 7 = 34 tokens (> 20 available)
-        let messages = vec![msg_goal.clone(), msg_1.clone(), msg_2.clone(), msg_3.clone(), msg_4.clone()];
+        let messages = vec![
+            msg_goal.clone(),
+            msg_1.clone(),
+            msg_2.clone(),
+            msg_3.clone(),
+            msg_4.clone(),
+        ];
         let (compacted, was_compacted) = manager.compact_if_needed(messages);
 
         assert!(was_compacted);
         // Should keep the first (goal) and the last (msg_4), plus a system notice message
         assert_eq!(compacted.len(), 3);
         assert_eq!(compacted[0]["content"], "goal");
-        assert!(compacted[1]["content"].as_str().unwrap().contains("omitted"));
+        assert!(
+            compacted[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("omitted")
+        );
         assert_eq!(compacted[2]["content"], "reply four");
     }
 }

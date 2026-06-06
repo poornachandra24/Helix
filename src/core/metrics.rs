@@ -54,7 +54,10 @@ pub struct MetricsCollector {
 
 impl MetricsCollector {
     pub fn new(session_id: &str) -> Self {
-        Self { session_id: session_id.to_string(), turns: Vec::new() }
+        Self {
+            session_id: session_id.to_string(),
+            turns: Vec::new(),
+        }
     }
 
     pub fn record(&mut self, metrics: TurnMetrics) {
@@ -72,7 +75,10 @@ impl MetricsCollector {
     pub fn summary(&self) -> SessionSummary {
         let n = self.turns.len();
         if n == 0 {
-            return SessionSummary { session_id: self.session_id.clone(), ..Default::default() };
+            return SessionSummary {
+                session_id: self.session_id.clone(),
+                ..Default::default()
+            };
         }
 
         let mut durations: Vec<u64> = self.turns.iter().map(|t| t.duration_ms).collect();
@@ -83,15 +89,16 @@ impl MetricsCollector {
         let error_count = self.turns.iter().filter(|t| t.ended_with_error).count();
 
         SessionSummary {
-            session_id:          self.session_id.clone(),
-            turn_count:          n,
-            avg_duration_ms:     durations.iter().sum::<u64>() as f64 / n as f64,
-            p95_duration_ms:     durations[p95_idx],
-            avg_agent_steps:     self.turns.iter().map(|t| t.agent_steps).sum::<usize>() as f64 / n as f64,
-            total_tool_calls:    self.turns.iter().map(|t| t.tool_calls).sum(),
-            total_healer_retries:self.turns.iter().map(|t| t.healer_retries).sum(),
+            session_id: self.session_id.clone(),
+            turn_count: n,
+            avg_duration_ms: durations.iter().sum::<u64>() as f64 / n as f64,
+            p95_duration_ms: durations[p95_idx],
+            avg_agent_steps: self.turns.iter().map(|t| t.agent_steps).sum::<usize>() as f64
+                / n as f64,
+            total_tool_calls: self.turns.iter().map(|t| t.tool_calls).sum(),
+            total_healer_retries: self.turns.iter().map(|t| t.healer_retries).sum(),
             compaction_rate_per_10: compaction_count as f64 / n as f64 * 10.0,
-            error_rate:          error_count as f64 / n as f64,
+            error_rate: error_count as f64 / n as f64,
         }
     }
 
@@ -116,7 +123,10 @@ pub struct TurnTimer {
 
 impl TurnTimer {
     pub fn start(prompt: &str) -> Self {
-        Self { start: Instant::now(), prompt_chars: prompt.len() }
+        Self {
+            start: Instant::now(),
+            prompt_chars: prompt.len(),
+        }
     }
 
     pub fn finish(
@@ -149,7 +159,7 @@ mod tests {
     #[test]
     fn test_metrics_collector_summary() {
         let mut collector = MetricsCollector::new("test_session");
-        
+
         collector.record(TurnMetrics {
             turn_index: 0,
             prompt_chars: 10,

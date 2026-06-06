@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use helix::{config, cli};
+use helix::{cli, config};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Helix — autonomous AI agent CLI", long_about = None)]
@@ -46,9 +46,15 @@ async fn main() -> Result<()> {
 
     match &args.cmd {
         Some(Command::Config) => {
-            println!("Current: {} / {}", app_config.active_provider, app_config.active_model);
+            println!(
+                "Current: {} / {}",
+                app_config.active_provider, app_config.active_model
+            );
             let new_config = config::interactive_setup(Some(app_config))?;
-            println!("✅ Now using: {} / {}", new_config.active_provider, new_config.active_model);
+            println!(
+                "✅ Now using: {} / {}",
+                new_config.active_provider, new_config.active_model
+            );
         }
 
         Some(Command::Run { goal }) => {
