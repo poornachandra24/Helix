@@ -174,9 +174,11 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         };
 
         print!(
-            "\n{} {} ",
-            style(format!("[Ctx: {}]", pct_color)).dimmed(),
-            style(">").bold().blue()
+            "\n{} {} {} {} ",
+            style("◆").cyan(),
+            style("helix").white().bold(),
+            style(format!("(ctx: {})", pct_color)).dimmed(),
+            style("›").blue().bold()
         );
         io::stdout().flush()?;
 
@@ -992,10 +994,11 @@ fn print_boxed_response(content_width: usize, full_response: &str, elapsed_str: 
     let rendered_str = fmt_text.to_string();
 
     for line in rendered_str.lines() {
-        let clean_line = console::strip_ansi_codes(line);
+        let expanded_line = line.replace('\t', "    ");
+        let clean_line = console::strip_ansi_codes(&expanded_line);
         let display_width = clean_line.width();
         let pad = content_width.saturating_sub(display_width);
-        println!("  {}  {}{}  {}", pipe, line, " ".repeat(pad), pipe);
+        println!("  {}  {}{}  {}", pipe, expanded_line, " ".repeat(pad), pipe);
     }
 
     // Print bottom border
