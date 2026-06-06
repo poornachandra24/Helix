@@ -131,21 +131,17 @@ impl Engine {
         if let Ok(parsed) = serde_json::from_str::<Value>(raw_text) {
             if let Some(name) = parsed.get("name").and_then(|n| n.as_str()) {
                 tool_name = Some(name.to_string());
-            } else if let Some(calls) = parsed.as_array() {
-                if !calls.is_empty() {
-                    tool_name = calls[0].get("name").and_then(|n| n.as_str()).map(|n| n.to_string());
-                }
+            } else if let Some(first) = parsed.as_array().and_then(|c| c.first()) {
+                tool_name = first.get("name").and_then(|n| n.as_str()).map(|n| n.to_string());
             }
-        } else {
-            if let Some(start_idx) = raw_text.find("\"name\"") {
-                let sub = &raw_text[start_idx..];
-                if let Some(colon_idx) = sub.find(':') {
-                    let val_sub = &sub[colon_idx + 1..];
-                    if let Some(q1) = val_sub.find('"') {
-                        let after_q1 = &val_sub[q1 + 1..];
-                        if let Some(q2) = after_q1.find('"') {
-                            tool_name = Some(after_q1[..q2].to_string());
-                        }
+        } else if let Some(start_idx) = raw_text.find("\"name\"") {
+            let sub = &raw_text[start_idx..];
+            if let Some(colon_idx) = sub.find(':') {
+                let val_sub = &sub[colon_idx + 1..];
+                if let Some(q1) = val_sub.find('"') {
+                    let after_q1 = &val_sub[q1 + 1..];
+                    if let Some(q2) = after_q1.find('"') {
+                        tool_name = Some(after_q1[..q2].to_string());
                     }
                 }
             }
@@ -176,10 +172,8 @@ impl Engine {
                     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
                         let mut missing = Vec::new();
                         for req_field in required {
-                            if let Some(field_name) = req_field.as_str() {
-                                if args.get(field_name).is_none() {
-                                    missing.push(field_name);
-                                }
+                            if let Some(field_name) = req_field.as_str().filter(|name| args.get(*name).is_none()) {
+                                missing.push(field_name);
                             }
                         }
                         if !missing.is_empty() {
@@ -710,8 +704,8 @@ mod tests {
         let c = vec![0.0, 1.0, 0.0];
         assert!(cosine_similarity(&a, &c).abs() < 1e-5);
 
-        let d = vec![0.70710678, 0.70710678, 0.0];
-        assert!((cosine_similarity(&a, &d) - 0.70710678).abs() < 1e-5);
+        let d = vec![std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2, 0.0];
+        assert!((cosine_similarity(&a, &d) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
     }
 }
 

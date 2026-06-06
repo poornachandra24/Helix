@@ -1,11 +1,11 @@
-/// Dynamic context window resolver.
-///
-/// Resolution order (first success wins):
-///   1. `config.context_window_override` — user-set manual override
-///   2. Ollama native `/api/show` — for local/cloud Ollama providers
-///   3. Provider's own `/v1/models/{id}` — works for OpenAI and compatible providers
-///   4. OpenRouter public model catalogue — covers 1 000+ models, no auth needed
-///   5. Conservative fallback → 8 192
+//! Dynamic context window resolver.
+//!
+//! Resolution order (first success wins):
+//!   1. `config.context_window_override` — user-set manual override
+//!   2. Ollama native `/api/show` — for local/cloud Ollama providers
+//!   3. Provider's own `/v1/models/{id}` — works for OpenAI and compatible providers
+//!   4. OpenRouter public model catalogue — covers 1 000+ models, no auth needed
+//!   5. Conservative fallback → 8 192
 
 use reqwest::Client;
 use serde_json::Value;

@@ -189,20 +189,18 @@ impl OpenAiCompatibleAdapter {
                 });
 
                 let active_level = self.thinking_level.read().ok().and_then(|r| r.clone());
-                if let Some(level) = &active_level {
-                    if let Some(opts) = payload["options"].as_object_mut() {
-                        let level_lower = level.to_lowercase();
-                        if level_lower == "off" || level_lower == "disabled" {
-                            opts.insert("thinking_budget".to_string(), json!(0));
-                        } else if level_lower == "low" {
-                            opts.insert("thinking_budget".to_string(), json!(1024));
-                        } else if level_lower == "medium" {
-                            opts.insert("thinking_budget".to_string(), json!(4096));
-                        } else if level_lower == "high" {
-                            opts.insert("thinking_budget".to_string(), json!(16384));
-                        } else if let Ok(budget) = level.parse::<u64>() {
-                            opts.insert("thinking_budget".to_string(), json!(budget));
-                        }
+                if let (Some(level), Some(opts)) = (&active_level, payload["options"].as_object_mut()) {
+                    let level_lower = level.to_lowercase();
+                    if level_lower == "off" || level_lower == "disabled" {
+                        opts.insert("thinking_budget".to_string(), json!(0));
+                    } else if level_lower == "low" {
+                        opts.insert("thinking_budget".to_string(), json!(1024));
+                    } else if level_lower == "medium" {
+                        opts.insert("thinking_budget".to_string(), json!(4096));
+                    } else if level_lower == "high" {
+                        opts.insert("thinking_budget".to_string(), json!(16384));
+                    } else if let Ok(budget) = level.parse::<u64>() {
+                        opts.insert("thinking_budget".to_string(), json!(budget));
                     }
                 }
 

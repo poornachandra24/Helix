@@ -53,10 +53,9 @@ impl SkillRegistry {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
                 let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
-                if path.is_file() && matches!(ext, "txt" | "md") {
-                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        skill_names.push(name.to_string());
-                    }
+                let is_match = path.is_file() && matches!(ext, "txt" | "md");
+                if let Some(name) = path.file_stem().and_then(|s| s.to_str()).filter(|_| is_match) {
+                    skill_names.push(name.to_string());
                 }
             }
         }

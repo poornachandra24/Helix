@@ -108,6 +108,6 @@ pub fn list_sessions() -> Result<Vec<SessionMeta>> {
         })
         .collect();
 
-    sessions.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    sessions.sort_by_key(|b| std::cmp::Reverse(b.modified_at));
     Ok(sessions)
 }

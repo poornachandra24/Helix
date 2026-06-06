@@ -369,12 +369,13 @@ impl SandboxBackend for WasmSandbox {
         } else {
             let mut executed = false;
             for export in module.exports() {
-                if let wasmi::ExternType::Func(_) = export.ty() {
-                    if let Ok(func) = instance.get_typed_func::<(), ()>(&store, export.name()) {
-                        func.call(&mut store, ())?;
-                        executed = true;
-                        break;
-                    }
+                if !matches!(export.ty(), wasmi::ExternType::Func(_)) {
+                    continue;
+                }
+                if let Ok(func) = instance.get_typed_func::<(), ()>(&store, export.name()) {
+                    func.call(&mut store, ())?;
+                    executed = true;
+                    break;
                 }
             }
             if !executed {

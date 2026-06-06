@@ -417,7 +417,7 @@ fn strip_html_tags(html: &str) -> String {
                 tag_buffer.push(tc.to_ascii_lowercase());
                 chars.next();
             }
-            while let Some(tc) = chars.next() {
+            for tc in chars.by_ref() {
                 if tc == '>' {
                     break;
                 }
@@ -431,16 +431,12 @@ fn strip_html_tags(html: &str) -> String {
                 } else if matches!(tag_buffer.as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li") {
                     out.push('\n');
                 }
-            } else {
-                if tag_buffer == "script" {
-                    in_script = true;
-                } else if tag_buffer == "style" {
-                    in_style = true;
-                } else if tag_buffer == "br" {
-                    out.push('\n');
-                } else if matches!(tag_buffer.as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li") {
-                    out.push('\n');
-                }
+            } else if tag_buffer == "script" {
+                in_script = true;
+            } else if tag_buffer == "style" {
+                in_style = true;
+            } else if tag_buffer == "br" || matches!(tag_buffer.as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li") {
+                out.push('\n');
             }
         } else if !in_script && !in_style {
             if c == '&' {

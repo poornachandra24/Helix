@@ -151,7 +151,7 @@ impl HelixMemoryEngine {
         let (scores, ids) = self.index.search_with_allowlist(&query_vector, limit, Some(&allowed_ids));
         
         let mut matches = Vec::new();
-        for (score, id) in scores.into_iter().zip(ids.into_iter()) {
+        for (score, id) in scores.into_iter().zip(ids) {
             let mut stmt = self.db.prepare(
                 "SELECT text, file_path FROM memory_metadata WHERE id = ?"
             )?;
