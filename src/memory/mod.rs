@@ -1,6 +1,8 @@
 pub mod skills;
 
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::TextEmbedding;
+#[cfg(not(test))]
+use fastembed::{EmbeddingModel, InitOptions};
 use rusqlite::Connection;
 use std::path::Path;
 use turbovec::IdMapIndex;
@@ -12,10 +14,15 @@ pub struct MemoryMatch {
     pub score: f32,
 }
 
+pub enum Embedder {
+    Real(Box<TextEmbedding>),
+    Mock,
+}
+
 pub struct HelixMemoryEngine {
     index: IdMapIndex,
     pub db: Connection,
-    embedder: TextEmbedding,
+    embedder: Embedder,
     index_path: std::path::PathBuf,
 }
 
@@ -49,10 +56,13 @@ impl HelixMemoryEngine {
             [],
         )?;
 
-        // Load default local embedding model (BGESmallENV15 - 384 dimensions)
-        let embedder = TextEmbedding::try_new(
+        // Under test cfg, use mock to avoid downloading BGESmallENV15 model
+        #[cfg(not(test))]
+        let embedder = Embedder::Real(Box::new(TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::BGESmallENV15).with_show_download_progress(false),
-        )?;
+        )?));
+        #[cfg(test)]
+        let embedder = Embedder::Mock;
 
         Ok(Self {
             index,
@@ -69,13 +79,27 @@ impl HelixMemoryEngine {
             .unwrap_or(0)
     }
 
-    /// Embed a single text string using fastembed.
+    /// Embed a single text string using fastembed (or mock deterministic embedder during test).
     pub fn embed_text(&mut self, text: &str) -> anyhow::Result<Vec<f32>> {
-        let embeddings = self.embedder.embed(vec![text], None)?;
-        if embeddings.is_empty() {
-            anyhow::bail!("Failed to generate embedding");
+        match &mut self.embedder {
+            Embedder::Real(emb) => {
+                let embeddings = emb.embed(vec![text], None)?;
+                if embeddings.is_empty() {
+                    anyhow::bail!("Failed to generate embedding");
+                }
+                Ok(embeddings[0].clone())
+            }
+            Embedder::Mock => {
+                #[cfg(test)]
+                {
+                    Ok(mock_embed(text))
+                }
+                #[cfg(not(test))]
+                {
+                    anyhow::bail!("Mock embedder is not available in production builds");
+                }
+            }
         }
-        Ok(embeddings[0].clone())
     }
 
     /// Insert a memory item: generates an embedding, stores metadata in SQLite,
@@ -86,11 +110,7 @@ impl HelixMemoryEngine {
         file_path: Option<&str>,
         workspace_path: &str,
     ) -> anyhow::Result<()> {
-        let embeddings = self.embedder.embed(vec![text], None)?;
-        if embeddings.is_empty() {
-            anyhow::bail!("Failed to generate embedding");
-        }
-        let embedding = &embeddings[0];
+        let embedding = self.embed_text(text)?;
 
         self.db.execute(
             "INSERT INTO memory_metadata (text, file_path, workspace_path) VALUES (?, ?, ?)",
@@ -99,7 +119,7 @@ impl HelixMemoryEngine {
         let row_id = self.db.last_insert_rowid() as u64;
 
         self.index
-            .add_with_ids(embedding, &[row_id])
+            .add_with_ids(&embedding, &[row_id])
             .map_err(|e| anyhow::anyhow!("{:?}", e))?;
         self.persist()?;
 
@@ -118,11 +138,7 @@ impl HelixMemoryEngine {
             return Ok(Vec::new());
         }
 
-        let embeddings = self.embedder.embed(vec![query], None)?;
-        if embeddings.is_empty() {
-            anyhow::bail!("Failed to embed search query");
-        }
-        let mut query_vector = embeddings[0].clone();
+        let mut query_vector = self.embed_text(query)?;
 
         if let Some(sona_engine) = sona {
             let mut optimized = vec![0.0f32; 384];
@@ -201,6 +217,39 @@ impl HelixMemoryEngine {
         self.persist()?;
         Ok(())
     }
+}
+
+#[cfg(test)]
+fn mock_embed(text: &str) -> Vec<f32> {
+    let mut vec = vec![0.0; 384];
+    let text_lower = text.to_lowercase();
+    if text_lower.contains("rust") || text_lower.contains("safety") || text_lower.contains("speed")
+    {
+        vec[0] = 1.0;
+    } else if text_lower.contains("python") || text_lower.contains("interpreted") {
+        vec[1] = 1.0;
+    } else if text_lower.contains("cargo") || text_lower.contains("package manager") {
+        vec[2] = 1.0;
+    } else {
+        // Fallback deterministic vector
+        let bytes = text.as_bytes();
+        for i in 0..384 {
+            if !bytes.is_empty() {
+                let b = bytes[i % bytes.len()] as f32;
+                vec[i] = (b * (i as f32 + 1.0)).sin();
+            } else {
+                vec[i] = (i as f32).cos();
+            }
+        }
+    }
+    // Normalize
+    let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for val in &mut vec {
+            *val /= norm;
+        }
+    }
+    vec
 }
 
 #[cfg(test)]

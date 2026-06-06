@@ -60,16 +60,34 @@ For full color token definitions and box math, see [docs/ux_design.md](docs/ux_d
 
 ---
 
-## 🛠️ Usage
+## 📥 Quick Start & Installation
+
+Install Helix CLI on your local machine with a single setup command:
+
+### macOS & Linux:
+```bash
+curl -fsSL https://helix.sh/install.sh | sh
+```
+
+### Windows (PowerShell):
+```powershell
+irm https://helix.sh/install.ps1 | iex
+```
+
+*For alternative install methods (Cargo, Docker, manual build) and configuration steps, see the dedicated [Installation & Setup Guide](docs/installation.md).*
+
+---
+
+## 🛠️ Local Development & Building
+
+If you are developing Helix locally:
 
 ### Building
-
 ```bash
 cargo build --release
 ```
 
-### Running the Engine
-
+### Running
 ```bash
 cargo run
 # With verbose logging
@@ -110,6 +128,7 @@ See [docs/mcp_integration.md](docs/mcp_integration.md) for details.
 
 | Document | Contents |
 |----------|----------|
+| [docs/installation.md](docs/installation.md) | Dedicated Installation, setup wizard, Docker & config guide |
 | [docs/memory_architecture.md](docs/memory_architecture.md) | Dual-store memory design, data flow, footprint profiles |
 | [docs/mcp_integration.md](docs/mcp_integration.md) | MCP client subsystem, process lifecycle, config |
 | [docs/ux_design.md](docs/ux_design.md) | Terminal UI system, color tokens, box math, telemetry format |

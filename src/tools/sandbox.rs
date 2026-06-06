@@ -220,24 +220,19 @@ impl DockerSandbox {
             return resolve_and_validate_path(&current_dir, path);
         }
 
-        let path_to_validate = if target.is_absolute() {
-            if target.starts_with(&self.container_workspace) {
-                target
-                    .strip_prefix(&self.container_workspace)
-                    .unwrap_or(target)
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                target
-                    .strip_prefix("/")
-                    .unwrap_or(target)
-                    .to_string_lossy()
-                    .into_owned()
-            }
+        let path_str = path.replace('\\', "/");
+        let path_to_validate = if path_str.starts_with(&self.container_workspace) {
+            path_str
+                .strip_prefix(&self.container_workspace)
+                .unwrap_or(&path_str)
+                .to_string()
+        } else if path_str.starts_with('/') {
+            path_str.strip_prefix('/').unwrap_or(&path_str).to_string()
         } else {
             path.to_string()
         };
 
+        let path_to_validate = path_to_validate.trim_start_matches('/').to_string();
         resolve_and_validate_path(&current_dir, &path_to_validate)
     }
 }
@@ -341,13 +336,9 @@ impl WasmSandbox {
     }
 
     fn translate_path(&self, path: &str) -> Result<PathBuf> {
-        let target = Path::new(path);
-        let path_to_validate = if target.is_absolute() {
-            target
-                .strip_prefix("/")
-                .unwrap_or(target)
-                .to_string_lossy()
-                .into_owned()
+        let path_str = path.replace('\\', "/");
+        let path_to_validate = if path_str.starts_with('/') {
+            path_str.trim_start_matches('/').to_string()
         } else {
             path.to_string()
         };

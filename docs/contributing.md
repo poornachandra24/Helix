@@ -48,20 +48,29 @@ Docker images are built and pushed to the GitHub Container Registry (`ghcr.io/po
 ## 3. Getting Started for New Users
 
 ### Installation
-Users can install Helix via one of the following methods:
+Users can install Helix using one of the following standard methods:
 
-**Method A: Via Cargo**
-```bash
-cargo install helix-cli
-```
-
-**Method B: Direct Shell Script (Downloads static binary)**
+**macOS & Linux (Shell Script)**
+Downloads the correct precompiled binary, extracts it, installs it to `~/.local/bin`, and offers to configure/launch Helix:
 ```bash
 curl -fsSL https://helix.sh/install.sh | sh
 ```
 
+**Windows (PowerShell)**
+Downloads the native MSVC executable, installs it to `~/.helix/bin`, updates the user `PATH` environment variable, and offers to configure/launch Helix:
+```powershell
+irm https://helix.sh/install.ps1 | iex
+```
+
+**Via Cargo (Rust developers)**
+```bash
+cargo install helix-cli
+```
+
 ### Initial Configuration
-On first run, Helix generates a default configuration file. Edit `~/.config/helix/config.toml` to enter your model key and provider preferences:
+On first execution (or by running `helix config`), Helix launches an interactive command-line setup wizard to configure your preferred LLM provider, API base URL, API keys, and model selections.
+
+If you prefer to configure it manually, you can edit the generated file at `~/.config/helix/config.toml` (or `%USERPROFILE%\.config\helix\config.toml` on Windows):
 
 ```toml
 active_provider = "anthropic"
@@ -72,7 +81,7 @@ sandbox_mode = "docker"
 api_key = "sk-ant-..."
 ```
 
-Run the REPL by invoking the binary:
+To run the interactive CLI chat session, invoke:
 ```bash
 helix
 ```
