@@ -542,8 +542,8 @@ pub fn resolve_and_validate_path(base_dir: &Path, user_path: &str) -> Result<Pat
     #[cfg(target_os = "windows")]
     let canonical_base = {
         let base_str = canonical_base.to_string_lossy();
-        if base_str.starts_with(r#"\\?\"#) {
-            PathBuf::from(&base_str[4..])
+        if let Some(stripped) = base_str.strip_prefix(r#"\\?\"#) {
+            PathBuf::from(stripped)
         } else {
             canonical_base
         }
@@ -574,8 +574,8 @@ pub fn resolve_and_validate_path(base_dir: &Path, user_path: &str) -> Result<Pat
     #[cfg(target_os = "windows")]
     let canonical_target = {
         let target_str = canonical_target.to_string_lossy();
-        if target_str.starts_with(r#"\\?\"#) {
-            PathBuf::from(&target_str[4..])
+        if let Some(stripped) = target_str.strip_prefix(r#"\\?\"#) {
+            PathBuf::from(stripped)
         } else {
             canonical_target
         }
