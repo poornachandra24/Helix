@@ -349,13 +349,14 @@ impl WasmSandbox {
 #[async_trait]
 impl SandboxBackend for WasmSandbox {
     async fn execute_command(&self, cmd: &str) -> Result<CommandResult> {
+
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             anyhow::bail!("No WASM program specified");
         }
 
         let wasm_file = parts[0];
-        let _args = parts[1..]
+        let args = parts[1..]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
@@ -366,43 +367,100 @@ impl SandboxBackend for WasmSandbox {
         }
 
         let wasm_bytes = tokio::fs::read(&real_wasm_path).await?;
+        let jail_dir_clone = self.jail_dir.clone();
 
-        let engine = wasmi::Engine::default();
-        let module = wasmi::Module::new(&engine, &mut &wasm_bytes[..])
-            .map_err(|e| anyhow::anyhow!("Failed to compile WASM module: {}", e))?;
+        let result = tokio::task::spawn_blocking(move || -> Result<CommandResult> {
+            let mut config = wasmi::Config::default();
+            config.consume_fuel(true);
+            let engine = wasmi::Engine::new(&config);
+            let module = wasmi::Module::new(&engine, &mut &wasm_bytes[..])
+                .map_err(|e| anyhow::anyhow!("Failed to compile WASM module: {}", e))?;
 
-        let mut store = wasmi::Store::new(&engine, ());
-        let linker = wasmi::Linker::new(&engine);
+            let stdout_pipe = wasi_common::pipe::WritePipe::new_in_memory();
+            let stderr_pipe = wasi_common::pipe::WritePipe::new_in_memory();
 
-        let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
+            let dir = wasmi_wasi::Dir::open_ambient_dir(&jail_dir_clone, wasmi_wasi::ambient_authority())
+                .map_err(|e| anyhow::anyhow!("Failed to open jail directory for WASM: {}", e))?;
 
-        if let Ok(func) = instance.get_typed_func::<(), ()>(&store, "_start") {
-            func.call(&mut store, ())?;
-        } else if let Ok(func) = instance.get_typed_func::<(), ()>(&store, "main") {
-            func.call(&mut store, ())?;
-        } else {
-            let mut executed = false;
-            for export in module.exports() {
-                if !matches!(export.ty(), wasmi::ExternType::Func(_)) {
-                    continue;
+            let mut wasi_builder = wasmi_wasi::WasiCtxBuilder::new()
+                .stdout(Box::new(stdout_pipe.clone()))
+                .stderr(Box::new(stderr_pipe.clone()))
+                .preopened_dir(dir, ".")?;
+
+            for arg in args {
+                wasi_builder = wasi_builder.arg(&arg)?;
+            }
+
+            let wasi_ctx = wasi_builder.build();
+            let mut store = wasmi::Store::new(&engine, wasi_ctx);
+            store.add_fuel(50_000_000).unwrap();
+
+            let mut linker = wasmi::Linker::<wasmi_wasi::WasiCtx>::new(&engine);
+            wasmi_wasi::add_to_linker(&mut linker, |ctx| ctx)?;
+
+            let instance = linker.instantiate(&mut store, &module)?.start(&mut store)?;
+
+            let run_result = if let Ok(func) = instance.get_typed_func::<(), ()>(&store, "_start") {
+                func.call(&mut store, ())
+            } else if let Ok(func) = instance.get_typed_func::<(), ()>(&store, "main") {
+                func.call(&mut store, ())
+            } else {
+                let mut executed = false;
+                let mut last_res = Ok(());
+                for export in module.exports() {
+                    if !matches!(export.ty(), wasmi::ExternType::Func(_)) {
+                        continue;
+                    }
+                    if let Ok(func) = instance.get_typed_func::<(), ()>(&store, export.name()) {
+                        last_res = func.call(&mut store, ());
+                        executed = true;
+                        break;
+                    }
                 }
-                if let Ok(func) = instance.get_typed_func::<(), ()>(&store, export.name()) {
-                    func.call(&mut store, ())?;
-                    executed = true;
-                    break;
+                if !executed {
+                    anyhow::bail!("No executable parameterless function found in WASM module");
+                }
+                last_res
+            };
+
+            drop(store);
+            let stdout_bytes = stdout_pipe.try_into_inner()
+                .map(|p| p.into_inner())
+                .unwrap_or_default();
+            let stderr_bytes = stderr_pipe.try_into_inner()
+                .map(|p| p.into_inner())
+                .unwrap_or_default();
+
+            let stdout_str = String::from_utf8_lossy(&stdout_bytes).into_owned();
+            let stderr_str = String::from_utf8_lossy(&stderr_bytes).into_owned();
+
+            match run_result {
+                Ok(_) => {
+                    Ok(CommandResult {
+                        exit_code: 0,
+                        stdout: stdout_str,
+                        stderr: stderr_str,
+                    })
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    let exit_code = if err_str.contains("out of fuel") {
+                        -2
+                    } else {
+                        -1
+                    };
+                    Ok(CommandResult {
+                        exit_code,
+                        stdout: stdout_str,
+                        stderr: format!("WASM Execution Error: {}\n{}", err_str, stderr_str),
+                    })
                 }
             }
-            if !executed {
-                anyhow::bail!("No executable parameterless function found in WASM module");
-            }
-        }
+        }).await?;
 
-        Ok(CommandResult {
-            exit_code: 0,
-            stdout: "WASM module executed successfully in sandbox.".to_string(),
-            stderr: String::new(),
-        })
+        result
     }
+
 
     async fn read_file(&self, path: &str) -> Result<String> {
         let real_path = self.translate_path(path)?;
@@ -686,7 +744,6 @@ mod tests {
 
         let res = sandbox.execute_command("test_module.wasm").await.unwrap();
         assert_eq!(res.exit_code, 0);
-        assert!(res.stdout.contains("executed successfully"));
 
         let _ = tokio::fs::remove_file(wasm_file_path).await;
     }
