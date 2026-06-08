@@ -141,9 +141,11 @@ impl HelixMemoryEngine {
         let mut query_vector = self.embed_text(query)?;
 
         if let Some(sona_engine) = sona {
-            let mut optimized = vec![0.0f32; 384];
-            sona_engine.apply_micro_lora(&query_vector, &mut optimized);
-            query_vector = optimized;
+            let mut shift = vec![0.0f32; 384];
+            sona_engine.apply_micro_lora(&query_vector, &mut shift);
+            for (q, s) in query_vector.iter_mut().zip(shift) {
+                *q += s;
+            }
         }
 
         // Retrieve candidate row IDs for the active workspace

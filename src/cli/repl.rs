@@ -234,7 +234,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     &engine.session.id,
                     engine.model.model_name(),
                     memory_size,
-                    engine.sona.as_ref(),
+                    engine.sona.as_deref(),
                     &active_skills,
                     true,
                 );

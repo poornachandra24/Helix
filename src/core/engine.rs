@@ -44,7 +44,7 @@ pub struct Engine {
     /// Local quantized semantic memory store.
     pub memory: Option<crate::memory::HelixMemoryEngine>,
     /// SONA self-optimizing engine.
-    pub sona: Option<SonaEngine>,
+    pub sona: Option<Arc<SonaEngine>>,
     /// Pre-computed embeddings for greetings and starter queries.
     pub semantic_cache: Vec<(String, String, Vec<f32>)>,
 }
@@ -126,7 +126,7 @@ impl Engine {
     }
 
     pub fn with_sona(mut self, sona: SonaEngine) -> Self {
-        self.sona = Some(sona);
+        self.sona = Some(Arc::new(sona));
         self
     }
 
@@ -384,7 +384,7 @@ impl Engine {
         };
         let sona_trajectory = self
             .sona
-            .as_ref()
+            .as_deref()
             .map(|s| s.begin_trajectory(query_embedding.clone()));
 
         // ── Check Semantic Cache ─────────────────────────────
@@ -479,7 +479,7 @@ impl Engine {
             if let Ok(workspace_dir) = std::env::current_dir() {
                 let workspace_str = workspace_dir.to_string_lossy().to_string();
                 if let Ok(matches) =
-                    memory_engine.search(input, self.sona.as_ref(), &workspace_str, 5)
+                    memory_engine.search(input, self.sona.as_deref(), &workspace_str, 5)
                 {
                     if !matches.is_empty() {
                         if let Some(ref tx) = stream_tx {
@@ -559,7 +559,7 @@ impl Engine {
         }
 
         // Finalize SONA Trajectory
-        if let (Some(sona_engine), Some(mut trajectory)) = (self.sona.as_ref(), sona_trajectory) {
+        if let (Some(sona_engine), Some(mut trajectory)) = (self.sona.clone(), sona_trajectory) {
             let is_err = result.is_err();
             let mut quality = 1.0f32;
             quality -= (turn_healer_retries as f32) * 0.15;
@@ -613,15 +613,25 @@ impl Engine {
                     style("·").color256(242),
                     quality_colored
                 ));
-                if let Some(log_msg) = sona_engine.tick() {
-                    let _ = tx.send(format!(
-                        "\x1b[T  {} Background loop tick: {}",
-                        sona_tag,
-                        style(log_msg).color256(117)
-                    ));
-                }
-            } else if let Some(log_msg) = sona_engine.tick() {
-                tracing::info!("{}", log_msg);
+                let sona_clone = sona_engine.clone();
+                let tx_clone = tx.clone();
+                let sona_tag_clone = sona_tag.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Some(log_msg) = sona_clone.tick() {
+                        let _ = tx_clone.send(format!(
+                            "\x1b[T  {} Background loop tick: {}",
+                            sona_tag_clone,
+                            style(log_msg).color256(117)
+                        ));
+                    }
+                });
+            } else {
+                let sona_clone = sona_engine.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Some(log_msg) = sona_clone.tick() {
+                        tracing::info!("{}", log_msg);
+                    }
+                });
             }
         }
 
