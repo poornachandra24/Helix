@@ -369,7 +369,7 @@ impl SandboxBackend for WasmSandbox {
         let wasm_bytes = tokio::fs::read(&real_wasm_path).await?;
         let jail_dir_clone = self.jail_dir.clone();
 
-        let result = tokio::task::spawn_blocking(move || -> Result<CommandResult> {
+        tokio::task::spawn_blocking(move || -> Result<CommandResult> {
             let mut config = wasmi::Config::default();
             config.consume_fuel(true);
             let engine = wasmi::Engine::new(&config);
@@ -456,9 +456,7 @@ impl SandboxBackend for WasmSandbox {
                     })
                 }
             }
-        }).await?;
-
-        result
+        }).await?
     }
 
 

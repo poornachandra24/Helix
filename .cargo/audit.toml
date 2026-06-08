@@ -1,0 +1,6 @@
+# cargo-audit configuration
+
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0445", # cap-primitives Windows device filenames sandboxing issue (locked by wasmi_wasi)
+]

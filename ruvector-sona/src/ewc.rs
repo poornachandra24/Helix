@@ -351,6 +351,7 @@ impl EwcPlusPlus {
 }
 
 #[cfg(test)]
+#[allow(clippy::useless_vec)]
 mod tests {
     use super::*;
 

@@ -177,6 +177,7 @@ impl BackgroundLoop {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn compute_trajectory_gradients(&self, trajectories: &[QueryTrajectory]) -> Vec<f32> {
         let lora = self.base_lora.read();
         let hidden_dim = lora.hidden_dim;

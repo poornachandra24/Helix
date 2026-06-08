@@ -66,6 +66,7 @@ impl LearningSignal {
     }
 
     /// Estimate gradient using REINFORCE with baseline
+    #[allow(clippy::needless_range_loop)]
     fn estimate_gradient(trajectory: &QueryTrajectory) -> Vec<f32> {
         if trajectory.steps.is_empty() {
             return trajectory.query_embedding.clone();
