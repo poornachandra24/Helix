@@ -67,7 +67,7 @@ For ultra-lightweight, near-instant sandboxed execution without Docker overhead,
 ### 3.1 Execution Engine (`wasmi`)
 Helix uses the `wasmi` interpreter to execute compiled WebAssembly modules locally:
 1.  **Jail Directory**: Restricts Wasm operations to a localized `wasm_jail/` folder.
-2.  **No Host Imports**: Disables raw host access imports, allowing execution strictly in a memory-isolated Guest VM.
+2.  **WASI & Metered Security**: Exposes controlled system calls via WASI (clock, stdout, stderr, stdin) restricted to a sandboxed directory jail, while enforcing strict execution fuel limits to prevent resource exhaustion and infinite loops.
 
 ### 3.2 Running a Module
 Use the `wasm_execute` tool by placing your compiled WebAssembly file (`.wasm`) in the workspace:

@@ -24,7 +24,11 @@ This downloads the native Windows MSVC binary, extracts it to `$HOME\.helix\bin\
 ### Rust Cargo (For Developers)
 If you have a local Rust toolchain installed, you can build and install directly from Crates.io:
 ```bash
-cargo install helix-cli
+# From crates.io (once published)
+cargo install helix
+
+# From the git repository directly
+cargo install --git https://github.com/poornachandra24/helix.git
 ```
 
 ### Docker (For Containerized Run)

@@ -64,7 +64,7 @@ irm https://helix.sh/install.ps1 | iex
 
 **Via Cargo (Rust developers)**
 ```bash
-cargo install helix-cli
+cargo install helix
 ```
 
 ### Initial Configuration

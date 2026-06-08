@@ -79,21 +79,25 @@ registry.register(Box::new(AddTool));
 External tools running in separate processes (Node, Python, Go, etc.) can be attached to Helix using the Model Context Protocol.
 
 ### 2.1 Configuration
-Add the external server specifications to your `config.toml` (typically located in `~/.config/helix/config.toml`):
+Add the external server specifications to your `mcp_config.json` (located in the current working directory or under `~/.config/helix/mcp_config.json`):
 
-```toml
-[mcp_servers]
-[mcp_servers.sqlite]
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-sqlite", "--db", "/home/user/my_db.db"]
-
-[mcp_servers.memory]
-command = "node"
-args = ["/path/to/mcp-server/index.js"]
+```json
+{
+  "mcpServers": {
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite", "--db", "/home/user/my_db.db"]
+    },
+    "memory": {
+      "command": "node",
+      "args": ["/path/to/mcp-server/index.js"]
+    }
+  }
+}
 ```
 
 ### 2.2 Execution Flow
-1. At REPL startup, Helix parses `mcp_servers`.
+1. At REPL startup, Helix parses `mcp_config.json`.
 2. For each server configured, it spawns a background child process (`tokio::process::Child`).
 3. Communicates via stdin/stdout JSON-RPC protocol.
 4. Automatically reads the tools list exposed by the server and wraps them as native Helix tools.
@@ -124,5 +128,5 @@ When auditing Rust code, check for the following anti-patterns:
 
 ### 3.2 Dynamic Ingest
 * Helix's `SkillRegistry` automatically scans the skills directory on startup.
-* When the user enters a prompt, Helix performs a semantic search on the skill descriptions.
-* Relevant skills are dynamically formatted and appended into the system prompt context.
+* All `.txt` and `.md` files found in the skills directory are compiled.
+* The combined skills block is automatically appended into the system prompt context for the session.

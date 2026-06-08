@@ -2,7 +2,7 @@
 
 ## 1️⃣ Repository & Licensing
 - [x] Add `LICENSE` (MIT) and ensure it is in the repo root.
-- [ ] Add `CODE_OF_CONDUCT.md`.
+- [x] Add `CODE_OF_CONDUCT.md`.
 - [x] Add `CONTRIBUTING.md` with guidelines for fork‑and‑PR workflow.
 - [x] Verify `Cargo.toml` contains correct package metadata (name, version, repository URL, license).
 
@@ -16,7 +16,7 @@
 - [x] Add a security‑gate check that runs on every PR (static analysis, cargo audit).
 
 ## 3️⃣ Documentation
-- [ ] Create `README.md` with:
+- [x] Create `README.md` with:
   - One‑sentence tagline.
   - Quick‑start (clone → `cargo run`).
   - Feature matrix vs. competitors.
@@ -37,25 +37,25 @@
 ## 5️⃣ Community & Governance
 - [ ] Set up Discord/Matrix community server and add invite link to README.
 - [ ] Enable GitHub Discussions for Q&A and ideas.
-- [ ] Draft a `GOVERNANCE.md` describing:
+- [x] Draft a `GOVERNANCE.md` describing:
   - Core maintainers.
   - RFC process for major changes.
 - [ ] Add a `FUNDING.yml` with OpenCollective, GitHub Sponsors, Liberapay.
 
 ## 6️⃣ Security & Privacy
-- [ ] Document the static security gate and its rules.
-- [ ] Publish a security‑bounty policy (e.g., via HackerOne or GitHub Security Advisories).
-- [ ] Ensure all dependencies are audited (`cargo audit`) and no unsafe code is introduced without review.
+- [x] Document the static security gate and its rules.
+- [x] Publish a security‑bounty policy (e.g., via HackerOne or GitHub Security Advisories).
+- [x] Ensure all dependencies are audited (`cargo audit`) and no unsafe code is introduced without review.
 
 ## 7️⃣ Marketing Materials
 - [ ] Design a simple logo (geometric “H” resembling a helix).
-- [ ] Create a hero GIF/video showing the REPL → self‑patch → continue loop.
+- [ ] Create a hero GIF/video showing the REPL → sandboxed tool execution → schema healing.
 - [ ] Prepare a one‑pager PDF with tagline, pillars, and target audience.
 - [ ] Draft a blog post announcing the open‑source launch.
 
 ## 8️⃣ Roadmap & Future Work
-- [ ] Publish a `ROADMAP.md` with short‑, mid‑, and long‑term milestones.
-- [ ] Highlight upcoming features: WASM sandbox, distributed index, UI dashboard.
+- [x] Publish a `ROADMAP.md` with short‑, mid‑, and long‑term milestones.
+- [x] Highlight upcoming features: WASM sandbox, distributed index, UI dashboard.
 
 ---
 
