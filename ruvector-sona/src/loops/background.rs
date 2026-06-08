@@ -198,7 +198,8 @@ impl BackgroundLoop {
             }
 
             // Compute trajectory baseline reward
-            let baseline = trajectory.steps.iter().map(|s| s.reward).sum::<f32>() / trajectory.steps.len() as f32;
+            let baseline = trajectory.steps.iter().map(|s| s.reward).sum::<f32>()
+                / trajectory.steps.len() as f32;
 
             for step in &trajectory.steps {
                 let advantage = step.reward - baseline;

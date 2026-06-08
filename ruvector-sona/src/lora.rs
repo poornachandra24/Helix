@@ -191,7 +191,9 @@ impl MicroLoRA {
     /// Accumulate gradient from learning signal
     #[allow(clippy::needless_range_loop)]
     pub fn accumulate_gradient(&mut self, signal: &LearningSignal) {
-        if signal.gradient_estimate.len() != self.hidden_dim || signal.query_embedding.len() != self.hidden_dim {
+        if signal.gradient_estimate.len() != self.hidden_dim
+            || signal.query_embedding.len() != self.hidden_dim
+        {
             return;
         }
 

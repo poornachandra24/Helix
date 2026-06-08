@@ -349,7 +349,6 @@ impl WasmSandbox {
 #[async_trait]
 impl SandboxBackend for WasmSandbox {
     async fn execute_command(&self, cmd: &str) -> Result<CommandResult> {
-
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             anyhow::bail!("No WASM program specified");
@@ -379,8 +378,11 @@ impl SandboxBackend for WasmSandbox {
             let stdout_pipe = wasi_common::pipe::WritePipe::new_in_memory();
             let stderr_pipe = wasi_common::pipe::WritePipe::new_in_memory();
 
-            let dir = wasmi_wasi::Dir::open_ambient_dir(&jail_dir_clone, wasmi_wasi::ambient_authority())
-                .map_err(|e| anyhow::anyhow!("Failed to open jail directory for WASM: {}", e))?;
+            let dir =
+                wasmi_wasi::Dir::open_ambient_dir(&jail_dir_clone, wasmi_wasi::ambient_authority())
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to open jail directory for WASM: {}", e)
+                    })?;
 
             let mut wasi_builder = wasmi_wasi::WasiCtxBuilder::new()
                 .stdout(Box::new(stdout_pipe.clone()))
@@ -424,10 +426,12 @@ impl SandboxBackend for WasmSandbox {
             };
 
             drop(store);
-            let stdout_bytes = stdout_pipe.try_into_inner()
+            let stdout_bytes = stdout_pipe
+                .try_into_inner()
                 .map(|p| p.into_inner())
                 .unwrap_or_default();
-            let stderr_bytes = stderr_pipe.try_into_inner()
+            let stderr_bytes = stderr_pipe
+                .try_into_inner()
                 .map(|p| p.into_inner())
                 .unwrap_or_default();
 
@@ -435,13 +439,11 @@ impl SandboxBackend for WasmSandbox {
             let stderr_str = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
             match run_result {
-                Ok(_) => {
-                    Ok(CommandResult {
-                        exit_code: 0,
-                        stdout: stdout_str,
-                        stderr: stderr_str,
-                    })
-                }
+                Ok(_) => Ok(CommandResult {
+                    exit_code: 0,
+                    stdout: stdout_str,
+                    stderr: stderr_str,
+                }),
                 Err(e) => {
                     let err_str = e.to_string();
                     let exit_code = if err_str.contains("out of fuel") {
@@ -456,9 +458,9 @@ impl SandboxBackend for WasmSandbox {
                     })
                 }
             }
-        }).await?
+        })
+        .await?
     }
-
 
     async fn read_file(&self, path: &str) -> Result<String> {
         let real_path = self.translate_path(path)?;
