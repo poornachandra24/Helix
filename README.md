@@ -74,7 +74,16 @@ curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.
 irm https://raw.githubusercontent.com/poornachandra24/Helix/main/install.ps1 | iex
 ```
 
-*For alternative install methods (Cargo, Docker, manual build) and configuration steps, see the dedicated [Installation & Setup Guide](docs/installation.md).*
+### Docker (Containerized):
+To run containerized without local installation:
+```bash
+docker run -it --rm \
+  -v "$(pwd)":/workspace \
+  -v "$HOME/.config/helix":/root/.config/helix \
+  ghcr.io/poornachandra24/helix:latest
+```
+
+*For alternative install methods (Cargo, manual build) and configuration steps, see the dedicated [Installation & Setup Guide](docs/installation.md).*
 
 ---
 
