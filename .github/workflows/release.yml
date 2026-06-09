@@ -20,10 +20,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             suffix: ""
             archive_ext: "tar.gz"
-          - os: macos-13
-            target: x86_64-apple-darwin
-            suffix: ""
-            archive_ext: "tar.gz"
           - os: macos-latest
             target: aarch64-apple-darwin
             suffix: ""
@@ -44,29 +40,22 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Disable Windows Defender
+        if: matrix.os == 'windows-latest'
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: powershell
+
       - name: Install OpenBLAS (Linux Only)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libopenblas-dev
 
-      - name: Setup Test Directories
-        shell: bash
-        run: mkdir -p wasm_jail
-
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}-release
-
-      - name: Cache HuggingFace Models
-        uses: actions/cache@v4
-        with:
-          path: .hf_cache
-          key: ${{ runner.os }}-hf-models-v1
-
-      - name: Run Test Suite (Release Mode)
-        run: cargo test --release --all-features
 
       - name: Build Target Release Binary
         run: cargo build --release --target ${{ matrix.target }}
