@@ -16,9 +16,9 @@ NC='\033[0m' # No Color
 
 # Print banner
 printf "${BLUE}╭────────────────────────────────────────────────────────╮${NC}\n"
-printf "${BLUE}│${NC}    ${BOLD}${CYAN}Helix — Autonomous Tool-Calling Agent CLI${NC}         ${BLUE}│${NC}\n"
+printf "${BLUE}│${NC}    ${BOLD}${CYAN}Helix - Autonomous Tool-Calling Agent CLI${NC}           ${BLUE}│${NC}\n"
 printf "${BLUE}├────────────────────────────────────────────────────────┤${NC}\n"
-printf "${BLUE}│${NC}  Installing the latest precompiled static binary...     ${BLUE}│${NC}\n"
+printf "${BLUE}│${NC}  Installing the latest precompiled static binary...    ${BLUE}│${NC}\n"
 printf "${BLUE}╰────────────────────────────────────────────────────────╯${NC}\n\n"
 
 # Check dependencies
@@ -30,7 +30,7 @@ for cmd in curl tar; do
 done
 
 # Define repository details
-REPO="poornachandra24/helix"
+REPO="poornachandra24/Helix"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
 
 # Detect OS
@@ -60,6 +60,7 @@ esac
 # Linux: helix-x86_64-unknown-linux-gnu.tar.gz or similar
 # macOS: universal binary/archive or specific arch
 # Let's map target triplet
+# Determine target asset name pattern
 TARGET_TRIPLET="${ARCH}-${OS}"
 
 printf "${CYAN}• Detecting system:${NC} ${BOLD}${OS_TYPE} (${ARCH_TYPE})${NC} -> ${TARGET_TRIPLET}\n"
@@ -74,6 +75,10 @@ if echo "$LATEST_RELEASE_JSON" | grep -q "API rate limit exceeded"; then
     # Fallback to redirect resolution
     DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/helix-${TARGET_TRIPLET}.tar.gz"
     TAG="latest"
+elif echo "$LATEST_RELEASE_JSON" | grep -q '"message": "Not Found"'; then
+    printf "${RED}Error: No releases have been published yet in this repository.${NC}\n" >&2
+    printf "${YELLOW}Please tag and publish a release (e.g. tag v0.1.0 and push it) to trigger the release workflow first.${NC}\n" >&2
+    exit 1
 else
     # Parse tag name
     TAG=$(echo "$LATEST_RELEASE_JSON" | grep '"tag_name":' | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')

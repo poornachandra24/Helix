@@ -14,12 +14,12 @@ $Bold = "`e[1m"
 $NC = "`e[0m"
 
 Write-Host "${Blue}╭────────────────────────────────────────────────────────╮${NC}"
-Write-Host "${Blue}│${NC}    ${Bold}${Cyan}Helix — Autonomous Tool-Calling Agent CLI${NC}         ${Blue}│${NC}"
+Write-Host "${Blue}│${NC}    ${Bold}${Cyan}Helix - Autonomous Tool-Calling Agent CLI${NC}           ${Blue}│${NC}"
 Write-Host "${Blue}├────────────────────────────────────────────────────────┤${NC}"
-Write-Host "${Blue}│${NC}  Installing the latest precompiled Windows binary...    ${Blue}│${NC}"
+Write-Host "${Blue}│${NC}  Installing the latest precompiled Windows binary...   ${Blue}│${NC}"
 Write-Host "${Blue}╰────────────────────────────────────────────────────────╯${NC}`n"
 
-$Repo = "poornachandra24/helix"
+$Repo = "poornachandra24/Helix"
 $GithubApi = "https://api.github.com/repos/$Repo/releases/latest"
 
 # Detect System Architecture
@@ -47,6 +47,11 @@ try {
     $Asset = $ReleaseInfo.assets | Where-Object { $_.name -like "*$TargetTriplet*" } | Select-Object -First 1
     $DownloadUrl = $Asset.browser_download_url
 } catch {
+    # Check if this is a 404 error (No release published yet)
+    if ($_.Exception.Response -and $_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) {
+        Write-Error "Error: No releases have been published yet in this repository.`nPlease tag and publish a release (e.g. tag v0.1.0 and push it) to trigger the release workflow first."
+        exit 1
+    }
     Write-Host "${Yellow}Warning: Failed to fetch release details from API. Using fallback download path.${NC}"
     $Tag = "latest"
     $DownloadUrl = "https://github.com/$Repo/releases/latest/download/helix-$TargetTriplet.zip"
