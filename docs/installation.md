@@ -11,13 +11,13 @@ Choose the installation method that best fits your environment:
 ### macOS & Linux (Shell Script)
 This is the recommended approach for macOS and Linux users. It detects your CPU architecture (Intel or Apple Silicon), downloads the correct precompiled binary, extracts it, installs it to `~/.local/bin`, and launches the setup wizard:
 ```bash
-curl -fsSL https://helix.sh/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 ```
 
 ### Windows (PowerShell Script)
 For native Windows users, run this command in PowerShell (Administrator access is not required):
 ```powershell
-irm https://helix.sh/install.ps1 | iex
+irm https://raw.githubusercontent.com/poornachandra24/Helix/main/install.ps1 | iex
 ```
 This downloads the native Windows MSVC binary, extracts it to `$HOME\.helix\bin\`, and appends the directory to your user `PATH` environment variable.
 

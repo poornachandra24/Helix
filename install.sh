@@ -1,7 +1,7 @@
 #!/bin/sh
 # Helix CLI Installer
 # One-liner to download, install, and launch Helix.
-# Usage: curl -fsSL https://helix.sh/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 
 set -eu
 

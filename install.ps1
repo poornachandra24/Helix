@@ -1,6 +1,6 @@
 # Helix CLI Windows Installer
 # One-liner to download, install, and launch Helix on Windows natively.
-# Usage (PowerShell): irm https://helix.sh/install.ps1 | iex
+# Usage (PowerShell): irm https://raw.githubusercontent.com/poornachandra24/Helix/main/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 

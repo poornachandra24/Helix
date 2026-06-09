@@ -66,12 +66,12 @@ Install Helix CLI on your local machine with a single setup command:
 
 ### macOS & Linux:
 ```bash
-curl -fsSL https://helix.sh/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 ```
 
 ### Windows (PowerShell):
 ```powershell
-irm https://helix.sh/install.ps1 | iex
+irm https://raw.githubusercontent.com/poornachandra24/Helix/main/install.ps1 | iex
 ```
 
 *For alternative install methods (Cargo, Docker, manual build) and configuration steps, see the dedicated [Installation & Setup Guide](docs/installation.md).*

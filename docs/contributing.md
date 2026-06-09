@@ -53,13 +53,13 @@ Users can install Helix using one of the following standard methods:
 **macOS & Linux (Shell Script)**
 Downloads the correct precompiled binary, extracts it, installs it to `~/.local/bin`, and offers to configure/launch Helix:
 ```bash
-curl -fsSL https://helix.sh/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 ```
 
 **Windows (PowerShell)**
 Downloads the native MSVC executable, installs it to `~/.helix/bin`, updates the user `PATH` environment variable, and offers to configure/launch Helix:
 ```powershell
-irm https://helix.sh/install.ps1 | iex
+irm https://raw.githubusercontent.com/poornachandra24/Helix/main/install.ps1 | iex
 ```
 
 **Via Cargo (Rust developers)**
