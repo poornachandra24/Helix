@@ -2,7 +2,7 @@
 FROM rust:1.82-slim-bookworm AS builder
 
 # Install build dependencies
-RUN apt-get update && apt-get install -p -y \
+RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     libopenblas-dev \
@@ -20,7 +20,7 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 
 # Install runtime dependencies (OpenBLAS and CA certificates for TLS requests)
-RUN apt-get update && apt-get install -p -y \
+RUN apt-get update && apt-get install -y \
     libopenblas0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
