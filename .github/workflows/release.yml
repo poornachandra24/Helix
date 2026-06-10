@@ -112,6 +112,7 @@ jobs:
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: helix-*
           path: artifacts
 
       - name: Rearrange Artifacts for Upload
