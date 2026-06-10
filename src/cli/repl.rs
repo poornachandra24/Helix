@@ -192,7 +192,25 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             }
             _ = tokio::signal::ctrl_c() => {
                 println!();
-                exit_gracefully(&engine);
+                let confirm = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Do you want to exit?")
+                    .default(false)
+                    .show_default(true)
+                    .interact_opt();
+
+                match confirm {
+                    Ok(Some(true)) => {
+                        exit_gracefully(&engine);
+                    }
+                    Ok(Some(false)) => {
+                        println!("{}", style("Exiting cancelled. Returning to chat.").dimmed());
+                        continue;
+                    }
+                    _ => {
+                        // User pressed Ctrl+C again (None) or some error occurred
+                        exit_gracefully(&engine);
+                    }
+                }
             }
         }
         let trimmed = input.trim();
@@ -475,26 +493,32 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
         // ── /config ───────────────────────────────────────────
         if trimmed == "/config" {
-            let new_config = config::interactive_setup(Some(app_config.clone()))?;
-            app_config = new_config.clone();
-            sandbox.set_mode(app_config.sandbox_mode);
-            let new_system = build_system_prompt(base_system, &skill_reg);
-            let new_context = build_context(
-                &new_config,
-                &new_system,
-                &engine.tools.descriptors(),
-                &lookup_client,
-            )
-            .await;
-            engine.update_model(build_model(&new_config), new_context);
-            println!(
-                "{}",
-                style(format!(
-                    "✔ Switched to {} / {}",
-                    app_config.active_provider, app_config.active_model
-                ))
-                .green()
-            );
+            match config::interactive_setup(Some(app_config.clone())) {
+                Ok(new_config) => {
+                    app_config = new_config.clone();
+                    sandbox.set_mode(app_config.sandbox_mode);
+                    let new_system = build_system_prompt(base_system, &skill_reg);
+                    let new_context = build_context(
+                        &new_config,
+                        &new_system,
+                        &engine.tools.descriptors(),
+                        &lookup_client,
+                    )
+                    .await;
+                    engine.update_model(build_model(&new_config), new_context);
+                    println!(
+                        "{}",
+                        style(format!(
+                            "✔ Switched to {} / {}",
+                            app_config.active_provider, app_config.active_model
+                        ))
+                        .green()
+                    );
+                }
+                Err(_) => {
+                    println!("\n{}", style("Configuration cancelled. Returning to chat.").yellow());
+                }
+            }
             continue;
         }
 

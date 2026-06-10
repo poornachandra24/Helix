@@ -122,11 +122,17 @@ async fn main() -> Result<()> {
                 "Current: {} / {}",
                 app_config.active_provider, app_config.active_model
             );
-            let new_config = config::interactive_setup(Some(app_config))?;
-            println!(
-                "✅ Now using: {} / {}",
-                new_config.active_provider, new_config.active_model
-            );
+            match config::interactive_setup(Some(app_config)) {
+                Ok(new_config) => {
+                    println!(
+                        "✅ Now using: {} / {}",
+                        new_config.active_provider, new_config.active_model
+                    );
+                }
+                Err(_) => {
+                    println!("\nConfiguration cancelled.");
+                }
+            }
         }
 
         Some(Command::Run { goal }) => {
