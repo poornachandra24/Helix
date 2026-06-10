@@ -68,6 +68,7 @@ Install Helix CLI on your local machine with a single setup command:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 ```
+*(Requires **GLIBC 2.35+**, i.e. Ubuntu 22.04+, Debian 12+. If your system has an older version of C libraries, run the **Docker** image instead).*
 
 ### Windows (PowerShell):
 ```powershell

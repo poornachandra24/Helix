@@ -14,6 +14,9 @@ This is the recommended approach for macOS and Linux users. It detects your CPU 
 curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 ```
 
+> [!NOTE]
+> **Compatibility**: The precompiled Linux binary requires **GLIBC 2.35 or newer** (found in Ubuntu 22.04+, Debian 12+, and other recent distributions). If your system runs an older version of glibc, please use the **Docker** installation method below.
+
 ### Windows (PowerShell Script)
 For native Windows users, run this command in PowerShell (Administrator access is not required):
 ```powershell

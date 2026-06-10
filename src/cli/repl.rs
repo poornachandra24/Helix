@@ -753,8 +753,8 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         let user_header = |s: &str| s.blue().bold().to_string();
         let user_pipe = "│".blue().to_string();
 
-        // Clear the user's raw input line (move cursor up 1 line and clear it)
-        print!("\x1B[1A\x1B[K");
+        // Clear the user's raw input line (move cursor up 1 line, reset to column 0, and clear it)
+        print!("\x1B[1A\r\x1B[K");
         io::stdout().flush().ok();
 
         // Print boxed user input

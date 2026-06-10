@@ -140,6 +140,15 @@ printf "${CYAN}• Installing binary to:${NC} ${BOLD}${INSTALL_DIR}/helix${NC}\n
 cp "$BINARY_PATH" "${INSTALL_DIR}/helix"
 chmod +x "${INSTALL_DIR}/helix"
 
+# Verify the binary runs on this system (checks GLIBC/C library compatibility)
+if ! "${INSTALL_DIR}/helix" --version >/dev/null 2>&1; then
+    printf "${RED}Error: The precompiled binary is incompatible with your system's C library (GLIBC).${NC}\n" >&2
+    printf "${YELLOW}This happens on older Linux distributions. We suggest running via Docker instead:${NC}\n" >&2
+    printf "  docker run -it --rm -v \"\$(pwd)\":/workspace -v \"\$HOME/.config/helix\":/root/.config/helix ghcr.io/${REPO}:latest\n\n" >&2
+    rm -f "${INSTALL_DIR}/helix"
+    exit 1
+fi
+
 printf "${GREEN}✓ Installation successful!${NC}\n\n"
 
 # Path validation & environment check
@@ -168,8 +177,8 @@ fi
 
 # Run setup & REPL option
 printf "${BOLD}Would you like to run Helix setup now? (y/n):${NC} "
-# Read user confirmation (supports non-interactive pipes gracefully)
-if [ -t 0 ]; then
+# Read user confirmation (handles piped stdin by reading from /dev/tty if available)
+if [ -c /dev/tty ] && [ -r /dev/tty ]; then
     read -r RESPONSE < /dev/tty || RESPONSE="n"
 else
     RESPONSE="n"

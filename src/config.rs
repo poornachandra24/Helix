@@ -273,13 +273,6 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         "",
         ApiFormat::OpenAiCompatible,
     ),
-    (
-        "Custom (Ollama native)",
-        "",
-        false,
-        "",
-        ApiFormat::OllamaNative,
-    ),
 ];
 
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {

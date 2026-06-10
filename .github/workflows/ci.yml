@@ -59,6 +59,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Disable Windows Defender
+        if: matrix.os == 'windows-latest'
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: powershell
+
       - name: Install Stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -90,6 +96,12 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Disable Windows Defender
+        if: matrix.os == 'windows-latest'
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true
+        shell: powershell
 
       - name: Install Stable Rust
         uses: dtolnay/rust-toolchain@stable
