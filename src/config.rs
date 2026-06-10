@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use dialoguer::{Input, Password, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
 use directories::ProjectDirs;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -221,21 +221,28 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         "Ollama (Local)",
         "http://localhost:11434",
         false,
-        "qwen3:4b",
+        "llama3.2",
         ApiFormat::OllamaNative,
     ),
     (
         "Ollama Cloud",
-        "https://ollama.com",
+        "https://ollama.com/api",
         true,
         "gpt-oss:120b-cloud",
         ApiFormat::OllamaNative,
     ),
     (
-        "Groq",
-        "https://api.groq.com/openai/v1",
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
         true,
-        "llama3-8b-8192",
+        "anthropic/claude-3.5-sonnet",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "DeepSeek",
+        "https://api.deepseek.com/v1",
+        true,
+        "deepseek-chat",
         ApiFormat::OpenAiCompatible,
     ),
     (
@@ -246,17 +253,24 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         ApiFormat::OpenAiCompatible,
     ),
     (
-        "vLLM (Local)",
-        "http://localhost:8000/v1",
-        false,
-        "meta-llama/Llama-3-8b",
+        "Groq",
+        "https://api.groq.com/openai/v1",
+        true,
+        "llama3-8b-8192",
         ApiFormat::OpenAiCompatible,
     ),
     (
         "Gemini",
         "https://generativelanguage.googleapis.com/v1beta/openai",
         true,
-        "gemini-1.5-flash",
+        "gemini-2.5-flash",
+        ApiFormat::OpenAiCompatible,
+    ),
+    (
+        "vLLM (Local)",
+        "http://localhost:8000/v1",
+        false,
+        "meta-llama/Llama-3-8b",
         ApiFormat::OpenAiCompatible,
     ),
     (
@@ -273,10 +287,26 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         "",
         ApiFormat::OpenAiCompatible,
     ),
+    (
+        "Custom (Ollama native)",
+        "",
+        false,
+        "",
+        ApiFormat::OllamaNative,
+    ),
 ];
 
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
-    let selections: Vec<&str> = PROVIDER_TEMPLATES.iter().map(|p| p.0).collect();
+    let selections: Vec<String> = PROVIDER_TEMPLATES
+        .iter()
+        .map(|p| {
+            if p.1.is_empty() {
+                p.0.to_string()
+            } else {
+                format!("{} (default: {} | {})", p.0, p.1, p.3)
+            }
+        })
+        .collect();
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Choose a Provider Template")
@@ -292,11 +322,42 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
         .default(default_url.to_string())
         .interact_text()?;
 
+    let env_var_name = match name.as_str() {
+        "OpenAI" => Some("OPENAI_API_KEY"),
+        "OpenRouter" => Some("OPENROUTER_API_KEY"),
+        "DeepSeek" => Some("DEEPSEEK_API_KEY"),
+        "Groq" => Some("GROQ_API_KEY"),
+        "Gemini" => Some("GEMINI_API_KEY"),
+        "Ollama Cloud" => Some("OLLAMA_API_KEY"),
+        _ => None,
+    };
+
     let api_key = if *needs_key {
-        let key: String = Password::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!("API Key for {}", name))
-            .interact()?;
-        Some(key)
+        let mut key_val = None;
+        if let Some(env_var) = env_var_name {
+            if let Ok(val) = std::env::var(env_var) {
+                if !val.trim().is_empty() {
+                    let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt(format!(
+                            "Detected API key in env ({}). Use it?",
+                            env_var
+                        ))
+                        .default(true)
+                        .interact()?;
+                    if confirm {
+                        key_val = Some(val);
+                    }
+                }
+            }
+        }
+
+        if key_val.is_none() {
+            let key: String = Password::with_theme(&ColorfulTheme::default())
+                .with_prompt(format!("API Key for {}", name))
+                .interact()?;
+            key_val = Some(key);
+        }
+        key_val
     } else {
         let key: String = Password::with_theme(&ColorfulTheme::default())
             .with_prompt(format!("API Key for {} (Enter to skip)", name))
