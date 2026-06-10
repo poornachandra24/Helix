@@ -57,27 +57,21 @@ fn perform_uninstall() -> Result<()> {
     stdin.lock().read_line(&mut line)?;
     if line.trim().eq_ignore_ascii_case("y") {
         // 1. Delete config dir (helix)
-        if let Ok(config_dir) = config::get_config_dir() {
-            if config_dir.exists() {
-                println!("Removing config directory: {:?}", config_dir);
-                let _ = std::fs::remove_dir_all(&config_dir);
-            }
+        if let Some(config_dir) = config::get_config_dir().ok().filter(|p| p.exists()) {
+            println!("Removing config directory: {:?}", config_dir);
+            let _ = std::fs::remove_dir_all(&config_dir);
         }
 
         // 2. Delete data dir (helix)
-        if let Ok(data_dir) = config::get_data_dir() {
-            if data_dir.exists() {
-                println!("Removing data directory: {:?}", data_dir);
-                let _ = std::fs::remove_dir_all(&data_dir);
-            }
+        if let Some(data_dir) = config::get_data_dir().ok().filter(|p| p.exists()) {
+            println!("Removing data directory: {:?}", data_dir);
+            let _ = std::fs::remove_dir_all(&data_dir);
         }
 
         // 3. Delete state dir (helix)
-        if let Ok(state_dir) = config::get_state_dir() {
-            if state_dir.exists() {
-                println!("Removing state directory: {:?}", state_dir);
-                let _ = std::fs::remove_dir_all(&state_dir);
-            }
+        if let Some(state_dir) = config::get_state_dir().ok().filter(|p| p.exists()) {
+            println!("Removing state directory: {:?}", state_dir);
+            let _ = std::fs::remove_dir_all(&state_dir);
         }
 
         // 4. Delete the executable
