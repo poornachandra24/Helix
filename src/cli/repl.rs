@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::config;
+use chrono::Local;
 use crate::core::context;
 use crate::core::engine;
 use crate::core::metrics;
@@ -86,13 +87,14 @@ fn print_help() {
     println!("{table}");
 }
 
-pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
+pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<String>) -> Result<()> {
     // Banner is printed after engine is built so we can pass session/memory/SONA info
+    let start_time = chrono::Local::now();
 
     let data_dir = config::get_data_dir()?;
     let skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
     let active_skills = skill_reg.list_skills();
-    let session = persistence::Session::new(None)?;
+    let session = persistence::Session::new(resume_id.as_deref())?;
     let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
     let mut tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
     let _mcp_registry = init_mcp_tools(&mut tools).await?;
@@ -133,6 +135,33 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
     let mut engine = engine::Engine::new(model, context, tools, session)
         .with_memory(memory_engine)
         .with_sona(sona_engine);
+
+    if let Some(r_id) = &resume_id {
+        match persistence::list_sessions() {
+            Ok(sessions) => {
+                if let Some(meta) = sessions.into_iter().find(|s| &s.id == r_id) {
+                    match persistence::Session::load_messages(&meta.path) {
+                        Ok(msgs) => {
+                            engine.global_messages = msgs;
+                            println!(
+                                "{}",
+                                style(format!(
+                                    "✔ Resumed session '{}' ({} messages loaded).",
+                                    r_id,
+                                    engine.global_messages.len()
+                                ))
+                                .green()
+                            );
+                        }
+                        Err(e) => println!("{}", style(format!("Warning: failed to load session messages: {}", e)).yellow()),
+                    }
+                } else {
+                    println!("{}", style(format!("Warning: session '{}' not found in history.", r_id)).yellow());
+                }
+            }
+            Err(e) => println!("{}", style(format!("Warning: failed to list sessions: {}", e)).yellow()),
+        }
+    }
     // Wire up metrics using the session ID
     let metrics_collector = metrics::MetricsCollector::new(&engine.session.id);
     engine = engine.with_metrics(metrics_collector);
@@ -187,7 +216,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             res = reader.read_line(&mut input) => {
                 let bytes_read = res?;
                 if bytes_read == 0 {
-                    exit_gracefully(&engine);
+                    exit_gracefully(&engine, start_time);
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -200,7 +229,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
 
                 match confirm {
                     Ok(Some(true)) => {
-                        exit_gracefully(&engine);
+                        exit_gracefully(&engine, start_time);
                     }
                     Ok(Some(false)) => {
                         println!("{}", style("Exiting cancelled. Returning to chat.").dimmed());
@@ -208,7 +237,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
                     }
                     _ => {
                         // User pressed Ctrl+C again (None) or some error occurred
-                        exit_gracefully(&engine);
+                        exit_gracefully(&engine, start_time);
                     }
                 }
             }
@@ -216,7 +245,7 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         let trimmed = input.trim();
 
         match trimmed {
-            "exit" | "quit" | "/exit" | "/quit" => exit_gracefully(&engine),
+            "exit" | "quit" | "/exit" | "/quit" => exit_gracefully(&engine, start_time),
             "/help" => {
                 print_help();
                 continue;
@@ -989,14 +1018,46 @@ fn model_registry_build_lookup_client() -> reqwest::Client {
     crate::model::registry::build_lookup_client()
 }
 
-fn exit_gracefully(engine: &engine::Engine) -> ! {
+fn exit_gracefully(engine: &engine::Engine, start_time: chrono::DateTime<Local>) -> ! {
+    let mut total_tool_calls = 0;
+    let mut user_turns = 0;
     if let Some(m) = &engine.metrics {
         if let Ok(state_dir) = config::get_state_dir() {
             let sessions_dir = state_dir.join("sessions");
             let _ = m.flush_to_disk(&sessions_dir);
         }
+        let summary = m.summary();
+        total_tool_calls = summary.total_tool_calls;
+        user_turns = summary.turn_count;
     }
-    println!("{}", style("Goodbye!").cyan());
+
+    if user_turns == 0 {
+        user_turns = engine.global_messages.iter()
+            .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+            .count();
+    }
+
+    let end_time = Local::now();
+    let duration = end_time.signed_duration_since(start_time);
+    let duration_str = if duration.num_minutes() > 0 {
+        format!("{}m {}s", duration.num_minutes(), duration.num_seconds() % 60)
+    } else {
+        format!("{}s", duration.num_seconds())
+    };
+
+    println!();
+    println!("{}", style("Resume this session with:").bold().cyan());
+    println!("  helix --resume {}", engine.session.id);
+    println!();
+    println!("Session:        {}", engine.session.id);
+    println!("Duration:       {}", duration_str);
+    println!("Messages:       {} ({} user, {} tool calls)",
+        engine.global_messages.len(),
+        user_turns,
+        total_tool_calls
+    );
+    println!();
+
     std::process::exit(0);
 }
 

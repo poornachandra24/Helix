@@ -17,12 +17,25 @@ struct Args {
     /// Uninstall Helix CLI and clean up configuration
     #[arg(long)]
     uninstall: bool,
+
+    /// Resume a past session by ID
+    #[arg(long, short)]
+    resume: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Interactive chat REPL (default)
-    Chat,
+    Chat {
+        /// Resume a past session by ID
+        #[arg(long, short)]
+        resume: Option<String>,
+    },
+    /// Resume a past session by ID
+    Resume {
+        /// The session ID to resume
+        session_id: String,
+    },
     /// Run a single goal and exit
     Run {
         /// The goal or instruction to execute
@@ -116,6 +129,14 @@ async fn main() -> Result<()> {
 
     let app_config = config::load_config()?;
 
+    let resume_id = args.resume.clone().or_else(|| {
+        match &args.cmd {
+            Some(Command::Chat { resume }) => resume.clone(),
+            Some(Command::Resume { session_id }) => Some(session_id.clone()),
+            _ => None,
+        }
+    });
+
     match &args.cmd {
         Some(Command::Config) => {
             println!(
@@ -139,8 +160,8 @@ async fn main() -> Result<()> {
             cli::run::run_single(&app_config, goal).await?;
         }
 
-        Some(Command::Chat) | None => {
-            cli::repl::run_repl(app_config).await?;
+        Some(Command::Chat { .. }) | Some(Command::Resume { .. }) | None => {
+            cli::repl::run_repl(app_config, resume_id).await?;
         }
 
         Some(Command::Uninstall) => {
