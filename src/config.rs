@@ -183,13 +183,13 @@ pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool
 }
 
 pub fn get_config_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("com", "harness", "harness-cli")
+    let proj_dirs = ProjectDirs::from("com", "harness", "helix")
         .context("Could not determine config directory")?;
     Ok(proj_dirs.config_dir().to_path_buf())
 }
 
 pub fn get_state_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("com", "harness", "harness-cli")
+    let proj_dirs = ProjectDirs::from("com", "harness", "helix")
         .context("Could not determine state directory")?;
     Ok(proj_dirs
         .state_dir()
@@ -198,7 +198,7 @@ pub fn get_state_dir() -> Result<PathBuf> {
 }
 
 pub fn get_data_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("com", "harness", "harness-cli")
+    let proj_dirs = ProjectDirs::from("com", "harness", "helix")
         .context("Could not determine data directory")?;
     Ok(proj_dirs.data_dir().to_path_buf())
 }

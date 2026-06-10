@@ -56,7 +56,7 @@ fn perform_uninstall() -> Result<()> {
     let stdin = std::io::stdin();
     stdin.lock().read_line(&mut line)?;
     if line.trim().eq_ignore_ascii_case("y") {
-        // 1. Delete config dir (harness-cli)
+        // 1. Delete config dir (helix)
         if let Ok(config_dir) = config::get_config_dir() {
             if config_dir.exists() {
                 println!("Removing config directory: {:?}", config_dir);
@@ -64,21 +64,7 @@ fn perform_uninstall() -> Result<()> {
             }
         }
 
-        // Also clean up ~/.config/helix if it exists
-        let home_dir = std::env::var("HOME")
-            .ok()
-            .or_else(|| std::env::var("USERPROFILE").ok())
-            .map(std::path::PathBuf::from);
-
-        if let Some(home) = home_dir {
-            let legacy_config = home.join(".config").join("helix");
-            if legacy_config.exists() {
-                println!("Removing legacy config directory: {:?}", legacy_config);
-                let _ = std::fs::remove_dir_all(&legacy_config);
-            }
-        }
-
-        // 2. Delete data dir (harness-cli)
+        // 2. Delete data dir (helix)
         if let Ok(data_dir) = config::get_data_dir() {
             if data_dir.exists() {
                 println!("Removing data directory: {:?}", data_dir);
@@ -86,7 +72,7 @@ fn perform_uninstall() -> Result<()> {
             }
         }
 
-        // 3. Delete state dir (harness-cli)
+        // 3. Delete state dir (helix)
         if let Ok(state_dir) = config::get_state_dir() {
             if state_dir.exists() {
                 println!("Removing state directory: {:?}", state_dir);
