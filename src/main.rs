@@ -50,7 +50,7 @@ enum Command {
 fn perform_uninstall() -> Result<()> {
     println!("This will delete the Helix configuration, databases, and the executable.");
     print!("Are you sure you want to uninstall Helix? (y/N): ");
-    use std::io::{Write, BufRead};
+    use std::io::{BufRead, Write};
     std::io::stdout().flush()?;
     let mut line = String::new();
     let stdin = std::io::stdin();
@@ -109,12 +109,10 @@ async fn main() -> Result<()> {
 
     let app_config = config::load_config()?;
 
-    let resume_id = args.resume.clone().or_else(|| {
-        match &args.cmd {
-            Some(Command::Chat { resume }) => resume.clone(),
-            Some(Command::Resume { session_id }) => Some(session_id.clone()),
-            _ => None,
-        }
+    let resume_id = args.resume.clone().or_else(|| match &args.cmd {
+        Some(Command::Chat { resume }) => resume.clone(),
+        Some(Command::Resume { session_id }) => Some(session_id.clone()),
+        _ => None,
     });
 
     match &args.cmd {

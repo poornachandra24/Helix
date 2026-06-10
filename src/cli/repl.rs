@@ -7,7 +7,6 @@ use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::config;
-use chrono::Local;
 use crate::core::context;
 use crate::core::engine;
 use crate::core::metrics;
@@ -15,6 +14,7 @@ use crate::core::persistence;
 use crate::memory;
 use crate::memory::skills;
 use crate::tools::sandbox;
+use chrono::Local;
 
 use super::helpers::{
     build_context, build_model, build_system_prompt, build_tool_registry, count_omitted_turns,
@@ -153,13 +153,24 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                 .green()
                             );
                         }
-                        Err(e) => println!("{}", style(format!("Warning: failed to load session messages: {}", e)).yellow()),
+                        Err(e) => println!(
+                            "{}",
+                            style(format!("Warning: failed to load session messages: {}", e))
+                                .yellow()
+                        ),
                     }
                 } else {
-                    println!("{}", style(format!("Warning: session '{}' not found in history.", r_id)).yellow());
+                    println!(
+                        "{}",
+                        style(format!("Warning: session '{}' not found in history.", r_id))
+                            .yellow()
+                    );
                 }
             }
-            Err(e) => println!("{}", style(format!("Warning: failed to list sessions: {}", e)).yellow()),
+            Err(e) => println!(
+                "{}",
+                style(format!("Warning: failed to list sessions: {}", e)).yellow()
+            ),
         }
     }
     // Wire up metrics using the session ID
@@ -545,7 +556,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                     );
                 }
                 Err(_) => {
-                    println!("\n{}", style("Configuration cancelled. Returning to chat.").yellow());
+                    println!(
+                        "\n{}",
+                        style("Configuration cancelled. Returning to chat.").yellow()
+                    );
                 }
             }
             continue;
@@ -1032,7 +1046,9 @@ fn exit_gracefully(engine: &engine::Engine, start_time: chrono::DateTime<Local>)
     }
 
     if user_turns == 0 {
-        user_turns = engine.global_messages.iter()
+        user_turns = engine
+            .global_messages
+            .iter()
             .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
             .count();
     }
@@ -1040,7 +1056,11 @@ fn exit_gracefully(engine: &engine::Engine, start_time: chrono::DateTime<Local>)
     let end_time = Local::now();
     let duration = end_time.signed_duration_since(start_time);
     let duration_str = if duration.num_minutes() > 0 {
-        format!("{}m {}s", duration.num_minutes(), duration.num_seconds() % 60)
+        format!(
+            "{}m {}s",
+            duration.num_minutes(),
+            duration.num_seconds() % 60
+        )
     } else {
         format!("{}s", duration.num_seconds())
     };
@@ -1051,7 +1071,8 @@ fn exit_gracefully(engine: &engine::Engine, start_time: chrono::DateTime<Local>)
     println!();
     println!("Session:        {}", engine.session.id);
     println!("Duration:       {}", duration_str);
-    println!("Messages:       {} ({} user, {} tool calls)",
+    println!(
+        "Messages:       {} ({} user, {} tool calls)",
         engine.global_messages.len(),
         user_turns,
         total_tool_calls

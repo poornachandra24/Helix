@@ -338,10 +338,7 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
             let env_val = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty());
             if let Some(val) = env_val {
                 let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt(format!(
-                        "Detected API key in env ({}). Use it?",
-                        env_var
-                    ))
+                    .with_prompt(format!("Detected API key in env ({}). Use it?", env_var))
                     .default(true)
                     .interact()?;
                 if confirm {
