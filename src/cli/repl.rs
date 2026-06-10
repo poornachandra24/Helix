@@ -187,18 +187,18 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
             res = reader.read_line(&mut input) => {
                 let bytes_read = res?;
                 if bytes_read == 0 {
-                    break;
+                    exit_gracefully(&engine);
                 }
             }
             _ = tokio::signal::ctrl_c() => {
                 println!();
-                break;
+                exit_gracefully(&engine);
             }
         }
         let trimmed = input.trim();
 
         match trimmed {
-            "exit" | "quit" | "/exit" | "/quit" => break,
+            "exit" | "quit" | "/exit" | "/quit" => exit_gracefully(&engine),
             "/help" => {
                 print_help();
                 continue;
@@ -957,20 +957,23 @@ pub async fn run_repl(mut app_config: config::AppConfig) -> Result<()> {
         }
     }
 
-    // Ensure metrics are flushed to disk before exiting
-    if let Some(m) = &engine.metrics {
-        let sessions_dir = config::get_state_dir()?.join("sessions");
-        if let Err(e) = m.flush_to_disk(&sessions_dir) {
-            tracing::warn!("Failed to flush metrics: {}", e);
-        }
-    }
-
-    println!("{}", style("Goodbye!").cyan());
+    #[allow(unreachable_code)]
     Ok(())
 }
 
 fn model_registry_build_lookup_client() -> reqwest::Client {
     crate::model::registry::build_lookup_client()
+}
+
+fn exit_gracefully(engine: &engine::Engine) -> ! {
+    if let Some(m) = &engine.metrics {
+        if let Ok(state_dir) = config::get_state_dir() {
+            let sessions_dir = state_dir.join("sessions");
+            let _ = m.flush_to_disk(&sessions_dir);
+        }
+    }
+    println!("{}", style("Goodbye!").cyan());
+    std::process::exit(0);
 }
 
 fn print_boxed_response(content_width: usize, full_response: &str, elapsed_str: &str) {
