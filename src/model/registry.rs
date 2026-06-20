@@ -313,7 +313,7 @@ pub async fn resolve_and_report(config: &AppConfig, client: &Client) -> usize {
 /// Helper: build a shared reqwest Client suitable for model lookups.
 pub fn build_lookup_client() -> Client {
     Client::builder()
-        .user_agent("harness-cli/0.1 (model-info-lookup)")
+        .user_agent("helix-cli/0.1 (model-info-lookup)")
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .expect("Failed to build lookup client")

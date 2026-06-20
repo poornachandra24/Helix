@@ -183,13 +183,13 @@ pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool
 }
 
 pub fn get_config_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("com", "harness", "helix")
+    let proj_dirs = ProjectDirs::from("com", "helix", "helix")
         .context("Could not determine config directory")?;
     Ok(proj_dirs.config_dir().to_path_buf())
 }
 
 pub fn get_state_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("com", "harness", "helix")
+    let proj_dirs = ProjectDirs::from("com", "helix", "helix")
         .context("Could not determine state directory")?;
     Ok(proj_dirs
         .state_dir()
@@ -198,7 +198,7 @@ pub fn get_state_dir() -> Result<PathBuf> {
 }
 
 pub fn get_data_dir() -> Result<PathBuf> {
-    let proj_dirs = ProjectDirs::from("com", "harness", "helix")
+    let proj_dirs = ProjectDirs::from("com", "helix", "helix")
         .context("Could not determine data directory")?;
     Ok(proj_dirs.data_dir().to_path_buf())
 }
@@ -211,7 +211,21 @@ pub fn load_config() -> Result<AppConfig> {
             return Ok(config);
         }
     }
-    println!("Welcome to Harness CLI! Let's set up your primary provider.");
+    
+    use owo_colors::OwoColorize;
+    println!();
+    println!("{}", "   ██╗  ██╗███████╗██╗     ██╗██╗  ██╗".cyan().bold());
+    println!("{}", "   ██║  ██║██╔════╝██║     ██║╚██╗██╔╝".cyan().bold());
+    println!("{}", "   ███████║█████╗  ██║     ██║ ╚███╔╝ ".cyan().bold());
+    println!("{}", "   ██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ".cyan().bold());
+    println!("{}", "   ██║  ██║███████╗███████╗██║██╔╝ ██╗".cyan().bold());
+    println!("{}", "   ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝".cyan().bold());
+    println!();
+    println!("  {}", "⚙️  Helix Setup Wizard".bold().cyan());
+    println!("  {}", "─────────────────────────────────────────".dimmed());
+    println!("  Let's configure your primary provider and model.");
+    println!();
+    
     interactive_setup(None)
 }
 
@@ -333,13 +347,7 @@ fn validate_provider_connectivity(provider: &Provider) {
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
     let selections: Vec<String> = PROVIDER_TEMPLATES
         .iter()
-        .map(|p| {
-            if p.1.is_empty() {
-                p.0.to_string()
-            } else {
-                format!("{} (default: {} | {})", p.0, p.1, p.3)
-            }
-        })
+        .map(|p| p.0.to_string())
         .collect();
 
     let selection = Select::with_theme(&ColorfulTheme::default())

@@ -416,7 +416,7 @@ impl WebFetchTool {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
-                .user_agent("harness-cli/0.1 (research agent)")
+                .user_agent("helix-cli/0.1 (research agent)")
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .expect("Failed to build HTTP client"),
