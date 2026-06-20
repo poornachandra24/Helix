@@ -101,16 +101,46 @@ fn print_help() {
 fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
     let mut commands = vec![
         ("/help".to_string(), "show this command guide".to_string()),
-        ("/status".to_string(), "show active model, context budget, SONA & optimization stats".to_string()),
-        ("/clear".to_string(), "reset current chat history context".to_string()),
-        ("/config".to_string(), "reconfigure active provider / model".to_string()),
-        ("/providers".to_string(), "list configured API providers".to_string()),
-        ("/use <name> [model]".to_string(), "hot-switch provider/model in the current session".to_string()),
-        ("/sessions".to_string(), "list previous chat sessions".to_string()),
-        ("/resume <id>".to_string(), "load a past session into the active context".to_string()),
-        ("/memory [query]".to_string(), "search/manage semantic memory (use --clear to wipe)".to_string()),
-        ("/thinking [level]".to_string(), "set or show reasoning effort/budget".to_string()),
-        ("/optimize".to_string(), "force SONA neural adaptation & parameter consolidation".to_string()),
+        (
+            "/status".to_string(),
+            "show active model, context budget, SONA & optimization stats".to_string(),
+        ),
+        (
+            "/clear".to_string(),
+            "reset current chat history context".to_string(),
+        ),
+        (
+            "/config".to_string(),
+            "reconfigure active provider / model".to_string(),
+        ),
+        (
+            "/providers".to_string(),
+            "list configured API providers".to_string(),
+        ),
+        (
+            "/use <name> [model]".to_string(),
+            "hot-switch provider/model in the current session".to_string(),
+        ),
+        (
+            "/sessions".to_string(),
+            "list previous chat sessions".to_string(),
+        ),
+        (
+            "/resume <id>".to_string(),
+            "load a past session into the active context".to_string(),
+        ),
+        (
+            "/memory [query]".to_string(),
+            "search/manage semantic memory (use --clear to wipe)".to_string(),
+        ),
+        (
+            "/thinking [level]".to_string(),
+            "set or show reasoning effort/budget".to_string(),
+        ),
+        (
+            "/optimize".to_string(),
+            "force SONA neural adaptation & parameter consolidation".to_string(),
+        ),
         ("/exit".to_string(), "exit the REPL session".to_string()),
         ("/quit".to_string(), "exit the REPL session".to_string()),
     ];
@@ -121,7 +151,10 @@ fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
             for s in sessions.iter().take(3) {
                 commands.push((
                     format!("/resume {}", s.id),
-                    format!("resume session from {}", s.modified_at.format("%Y-%m-%d %H:%M")),
+                    format!(
+                        "resume session from {}",
+                        s.modified_at.format("%Y-%m-%d %H:%M")
+                    ),
                 ));
             }
         }
@@ -154,9 +187,12 @@ fn render_suggestions_inline(
     }
 
     print!("\x1b[s");
-    
+
     print!("\r\n");
-    print!("  {}\r\n", style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold());
+    print!(
+        "  {}\r\n",
+        style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold()
+    );
     print!("  {}\r\n", style("─".repeat(50)).dimmed());
     for (i, (cmd, desc)) in matches.iter().enumerate() {
         if Some(i) == selected_index {
@@ -187,6 +223,11 @@ fn render_suggestions_inline(
 struct RawModeGuard;
 impl RawModeGuard {
     fn new() -> Self {
+        Self::default()
+    }
+}
+impl Default for RawModeGuard {
+    fn default() -> Self {
         let _ = crossterm::terminal::enable_raw_mode();
         Self
     }
@@ -319,9 +360,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
     print!("\x1b[?2004h");
     let _ = io::stdout().flush();
 
-
     loop {
-
         let msg_tokens: usize = engine
             .global_messages
             .iter()
@@ -358,11 +397,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             let _ = io::stdout().flush();
 
             loop {
-                let event = match tokio::task::spawn_blocking(|| {
-                    crossterm::event::read()
-                })
-                .await
-                {
+                let event = match tokio::task::spawn_blocking(|| crossterm::event::read()).await {
                     Ok(Ok(ev)) => ev,
                     _ => {
                         generate_and_save_reflection(&mut engine).await;
@@ -372,7 +407,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
 
                 match event {
                     crossterm::event::Event::Key(key_event) => {
-                        if key_event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                        if key_event
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL)
+                        {
                             match key_event.code {
                                 crossterm::event::KeyCode::Char('c') => {
                                     print!("\r\n");
@@ -384,11 +422,13 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                     let _ = io::stdout().flush();
 
                                     let _ = crossterm::terminal::disable_raw_mode();
-                                    let confirm = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                                        .with_prompt("Do you want to exit?")
-                                        .default(false)
-                                        .show_default(true)
-                                        .interact_opt();
+                                    let confirm = dialoguer::Confirm::with_theme(
+                                        &dialoguer::theme::ColorfulTheme::default(),
+                                    )
+                                    .with_prompt("Do you want to exit?")
+                                    .default(false)
+                                    .show_default(true)
+                                    .interact_opt();
                                     let _ = crossterm::terminal::enable_raw_mode();
 
                                     match confirm {
@@ -397,7 +437,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                             exit_gracefully(&engine, start_time);
                                         }
                                         _ => {
-                                            print!("{}\r\n", style("Exiting cancelled. Returning to chat.").dimmed());
+                                            print!(
+                                                "{}\r\n",
+                                                style("Exiting cancelled. Returning to chat.")
+                                                    .dimmed()
+                                            );
                                             print!("\x1b[?2004h");
                                             let _ = io::stdout().flush();
                                             print!(
@@ -409,7 +453,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 input
                                             );
                                             io::stdout().flush()?;
-                                            render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                            render_suggestions_inline(
+                                                &input,
+                                                selected_index,
+                                                &mut prev_suggestions_printed,
+                                            )?;
                                         }
                                     }
                                     continue;
@@ -431,7 +479,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                     input.push(c);
                                     print!("{}", c);
                                     io::stdout().flush()?;
-                                    render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                    render_suggestions_inline(
+                                        &input,
+                                        selected_index,
+                                        &mut prev_suggestions_printed,
+                                    )?;
                                 }
                                 crossterm::event::KeyCode::Backspace => {
                                     selected_index = None;
@@ -439,7 +491,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                         input.pop();
                                         print!("\x1b[1D \x1b[1D");
                                         io::stdout().flush()?;
-                                        render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                        render_suggestions_inline(
+                                            &input,
+                                            selected_index,
+                                            &mut prev_suggestions_printed,
+                                        )?;
                                     }
                                 }
                                 crossterm::event::KeyCode::Down => {
@@ -451,7 +507,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 None => 0,
                                             };
                                             selected_index = Some(next_idx);
-                                            render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                            render_suggestions_inline(
+                                                &input,
+                                                selected_index,
+                                                &mut prev_suggestions_printed,
+                                            )?;
                                         }
                                     }
                                 }
@@ -470,7 +530,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 None => matches.len() - 1,
                                             };
                                             selected_index = Some(next_idx);
-                                            render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                            render_suggestions_inline(
+                                                &input,
+                                                selected_index,
+                                                &mut prev_suggestions_printed,
+                                            )?;
                                         }
                                     }
                                 }
@@ -485,13 +549,21 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                     print!("\x1b[1D \x1b[1D");
                                                 }
                                                 input = first_match.to_string();
-                                                if input == "/resume" || input == "/use" || input == "/memory" || input == "/thinking" {
+                                                if input == "/resume"
+                                                    || input == "/use"
+                                                    || input == "/memory"
+                                                    || input == "/thinking"
+                                                {
                                                     input.push(' ');
                                                 }
                                                 selected_index = None;
                                                 print!("{}", input);
                                                 io::stdout().flush()?;
-                                                render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                                render_suggestions_inline(
+                                                    &input,
+                                                    selected_index,
+                                                    &mut prev_suggestions_printed,
+                                                )?;
                                             }
                                         }
                                     }
@@ -525,7 +597,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                         print!("{}", text);
                         io::stdout().flush()?;
                         selected_index = None;
-                        render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                        render_suggestions_inline(
+                            &input,
+                            selected_index,
+                            &mut prev_suggestions_printed,
+                        )?;
                     }
                     _ => {}
                 }
@@ -554,7 +630,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                 tokio::spawn(async move {
                     let model = build_model(&config);
                     if let Ok(memory_engine) = memory::HelixMemoryEngine::new(&memory_dir) {
-                        generate_and_save_reflection_bg(model, memory_engine, msgs, session_id).await;
+                        generate_and_save_reflection_bg(model, memory_engine, msgs, session_id)
+                            .await;
                     }
                 });
                 engine.global_messages.clear();
@@ -1032,7 +1109,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                         if sessions.is_empty() {
                             println!("{}", style("No saved sessions found.").yellow());
                         } else {
-                            println!("\n  {}", style("Recent sessions (newest first):").cyan().bold());
+                            println!(
+                                "\n  {}",
+                                style("Recent sessions (newest first):").cyan().bold()
+                            );
                             println!("  {}", style("─".repeat(50)).dimmed());
                             for s in sessions.iter().take(3) {
                                 println!(
@@ -1146,7 +1226,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                 );
             }
 
-            println!("\n  {}", style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold());
+            println!(
+                "\n  {}",
+                style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold()
+            );
             println!("  {}", style("─".repeat(50)).dimmed());
 
             for (cmd, desc) in &matches {
@@ -1589,7 +1672,13 @@ impl StreamTracker {
                 let fit_display_w = fit_clean.width();
                 let fit_pad = content_width.saturating_sub(fit_display_w);
                 print!("\r\x1B[K");
-                println!("  {}  {}{}  {}", self.pipe, fit, " ".repeat(fit_pad), self.pipe);
+                println!(
+                    "  {}  {}{}  {}",
+                    self.pipe,
+                    fit,
+                    " ".repeat(fit_pad),
+                    self.pipe
+                );
                 self.printed_lines += 1;
 
                 self.current_line = rem;
@@ -1608,7 +1697,13 @@ impl StreamTracker {
         let display_w = clean.width();
         let pad = content_width.saturating_sub(display_w);
         print!("\r\x1B[K");
-        println!("  {}  {}{}  {}", self.pipe, self.current_line, " ".repeat(pad), self.pipe);
+        println!(
+            "  {}  {}{}  {}",
+            self.pipe,
+            self.current_line,
+            " ".repeat(pad),
+            self.pipe
+        );
         self.printed_lines += 1;
         self.current_line.clear();
         print!("  {}  ", self.pipe);
@@ -1624,7 +1719,13 @@ impl StreamTracker {
         let display_w = clean.width();
         let pad = content_width.saturating_sub(display_w);
         print!("\r\x1B[K");
-        println!("  {}  {}{}  {}", self.pipe, self.current_line, " ".repeat(pad), self.pipe);
+        println!(
+            "  {}  {}{}  {}",
+            self.pipe,
+            self.current_line,
+            " ".repeat(pad),
+            self.pipe
+        );
         self.printed_lines += 1;
         self.current_line.clear();
         std::io::stdout().flush().ok();
@@ -1681,8 +1782,7 @@ async fn generate_and_save_reflection(engine: &mut engine::Engine) {
                                 summary_path.display()
                             );
                             if let Some(ref mut memory_engine) = engine.memory {
-                                if let Err(e) =
-                                    memory_engine.insert(&summary_text, None, "global")
+                                if let Err(e) = memory_engine.insert(&summary_text, None, "global")
                                 {
                                     eprintln!("⚠️  Failed to index reflective memory: {}", e);
                                 } else {
@@ -1744,15 +1844,18 @@ async fn generate_and_save_reflection_bg(
                             eprintln!("⚠️  Failed to create memory directory in background: {}", e);
                             return;
                         }
-                        let summary_path =
-                            memory_sessions_dir.join(format!("{}.md", session_id));
+                        let summary_path = memory_sessions_dir.join(format!("{}.md", session_id));
                         if let Err(e) = std::fs::write(&summary_path, &summary_text) {
-                            eprintln!("⚠️  Failed to write reflection summary in background: {}", e);
+                            eprintln!(
+                                "⚠️  Failed to write reflection summary in background: {}",
+                                e
+                            );
                         } else {
-                            if let Err(e) =
-                                memory_engine.insert(&summary_text, None, "global")
-                            {
-                                eprintln!("⚠️  Failed to index reflective memory in background: {}", e);
+                            if let Err(e) = memory_engine.insert(&summary_text, None, "global") {
+                                eprintln!(
+                                    "⚠️  Failed to index reflective memory in background: {}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -1760,7 +1863,10 @@ async fn generate_and_save_reflection_bg(
             }
         }
         Err(e) => {
-            eprintln!("⚠️  [Memory] Failed to generate reflection in background: {}", e);
+            eprintln!(
+                "⚠️  [Memory] Failed to generate reflection in background: {}",
+                e
+            );
         }
     }
 }

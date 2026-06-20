@@ -472,31 +472,33 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
 fn redact_secrets(input: &str) -> String {
     // Keywords that signal the next token is a secret value.
     const SECRET_KEYWORDS: &[&str] = &[
-        "key", "token", "secret", "password", "api", "auth", "bearer",
-        "KEY", "TOKEN", "SECRET", "PASSWORD", "API", "AUTH", "BEARER",
+        "key", "token", "secret", "password", "api", "auth", "bearer", "KEY", "TOKEN", "SECRET",
+        "PASSWORD", "API", "AUTH", "BEARER",
     ];
 
     let mut out = input.to_string();
 
     // Pass 1 – env-var / shell style:  SOME_KEY=VALUE  or  KEY="VALUE"
     // Walk through the string looking for `=` preceded by a secret keyword.
-    let bytes = out.as_bytes().to_vec();
-    let mut result = String::with_capacity(bytes.len());
-    let s = &out;
+    let mut result = String::with_capacity(out.len());
     let mut i = 0;
-    let chars: Vec<char> = s.chars().collect();
+    let chars: Vec<char> = out.chars().collect();
     while i < chars.len() {
         // Look for '='
         if chars[i] == '=' {
             // Check if the word before '=' contains a secret keyword
             let word_start = chars[..i]
                 .iter()
-                .rposition(|&c| c == ' ' || c == '"' || c == '\'' || c == ';' || c == '&' || c == '\n')
+                .rposition(|&c| {
+                    c == ' ' || c == '"' || c == '\'' || c == ';' || c == '&' || c == '\n'
+                })
                 .map(|p| p + 1)
                 .unwrap_or(0);
             let word: String = chars[word_start..i].iter().collect();
             let word_lower = word.to_lowercase();
-            let is_secret = SECRET_KEYWORDS.iter().any(|k| word_lower.contains(&k.to_lowercase()));
+            let is_secret = SECRET_KEYWORDS
+                .iter()
+                .any(|k| word_lower.contains(&k.to_lowercase()));
 
             if is_secret {
                 result.push('=');
@@ -515,8 +517,11 @@ fn redact_secrets(input: &str) -> String {
                 while i < chars.len() {
                     let c = chars[i];
                     if let Some(q) = quote {
-                        if c == q { break; }
-                    } else if c == ' ' || c == '\'' || c == '"' || c == ';' || c == '&' || c == '\n' {
+                        if c == q {
+                            break;
+                        }
+                    } else if c == ' ' || c == '\'' || c == '"' || c == ';' || c == '&' || c == '\n'
+                    {
                         break;
                     }
                     i += 1;
@@ -550,10 +555,14 @@ fn redact_secrets(input: &str) -> String {
             // skip optional space
             let rest_trimmed = rest.trim_start_matches(' ');
             let skipped = rest.len() - rest_trimmed.len();
-            for _ in 0..skipped { new_out.push(' '); }
+            for _ in 0..skipped {
+                new_out.push(' ');
+            }
             rest = rest_trimmed;
             // consume the value token (until whitespace or quote or end)
-            let end = rest.find(|c: char| c == ' ' || c == '"' || c == '\'' || c == '\n').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| c == ' ' || c == '"' || c == '\'' || c == '\n')
+                .unwrap_or(rest.len());
             if end >= 6 {
                 new_out.push_str("***REDACTED***");
             } else {
@@ -586,8 +595,8 @@ pub fn confirm_agent_action(
         .map(|(_, c)| c as usize)
         .unwrap_or(80);
     let table_width = term_cols.min(100); // cap at 100 for readability
-    const LABEL_COL: u16 = 18;
-    let value_col = (table_width.saturating_sub(LABEL_COL as usize + 6)) as u16;
+    let label_col: u16 = 18;
+    let value_col = (table_width.saturating_sub(label_col as usize + 6)) as u16;
 
     println!();
     let mut table = Table::new();
@@ -595,7 +604,7 @@ pub fn confirm_agent_action(
     table.apply_modifier(UTF8_ROUND_CORNERS);
     table.set_width(table_width as u16);
     table.set_constraints(vec![
-        ColumnConstraint::Absolute(Width::Fixed(LABEL_COL)),
+        ColumnConstraint::Absolute(Width::Fixed(label_col)),
         ColumnConstraint::Absolute(Width::Fixed(value_col)),
     ]);
 
@@ -611,7 +620,7 @@ pub fn confirm_agent_action(
             .set_alignment(comfy_table::CellAlignment::Right),
     ]);
 
-    let div_label: String = "─".repeat(LABEL_COL as usize);
+    let div_label: String = "─".repeat(label_col as usize);
     let div_value: String = "─".repeat(value_col as usize);
     table.add_row(vec![
         Cell::new(&div_label).fg(Color::DarkGrey),
