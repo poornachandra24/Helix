@@ -98,8 +98,9 @@ async fn main() -> Result<()> {
     }
 
     let log_level = match args.verbose {
-        0 => "warn",
-        1 => "info",
+        0 => "off",
+        1 => "warn",
+        2 => "info",
         _ => "debug",
     };
     tracing_subscriber::fmt()

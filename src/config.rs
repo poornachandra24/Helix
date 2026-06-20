@@ -162,11 +162,24 @@ impl AppConfig {
 }
 
 pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool {
+    let base = provider.base_url.trim_end_matches('/');
     let url = match provider.api_format {
         ApiFormat::OpenAiCompatible => {
-            format!("{}/models", provider.base_url.trim_end_matches('/'))
+            if base.ends_with("/models") {
+                base.to_string()
+            } else {
+                format!("{}/models", base)
+            }
         }
-        ApiFormat::OllamaNative => format!("{}/api/tags", provider.base_url.trim_end_matches('/')),
+        ApiFormat::OllamaNative => {
+            if base.ends_with("/api/tags") {
+                base.to_string()
+            } else if base.ends_with("/api") {
+                format!("{}/tags", base)
+            } else {
+                format!("{}/api/tags", base)
+            }
+        }
     };
     let mut req = client
         .get(&url)
@@ -183,12 +196,22 @@ pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool
 }
 
 pub fn get_config_dir() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("HELIX_HOME") {
+        if !val.trim().is_empty() {
+            return Ok(PathBuf::from(val).join("config"));
+        }
+    }
     let proj_dirs = ProjectDirs::from("com", "helix", "helix")
         .context("Could not determine config directory")?;
     Ok(proj_dirs.config_dir().to_path_buf())
 }
 
 pub fn get_state_dir() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("HELIX_HOME") {
+        if !val.trim().is_empty() {
+            return Ok(PathBuf::from(val).join("state"));
+        }
+    }
     let proj_dirs = ProjectDirs::from("com", "helix", "helix")
         .context("Could not determine state directory")?;
     Ok(proj_dirs
@@ -198,6 +221,11 @@ pub fn get_state_dir() -> Result<PathBuf> {
 }
 
 pub fn get_data_dir() -> Result<PathBuf> {
+    if let Ok(val) = std::env::var("HELIX_HOME") {
+        if !val.trim().is_empty() {
+            return Ok(PathBuf::from(val).join("data"));
+        }
+    }
     let proj_dirs = ProjectDirs::from("com", "helix", "helix")
         .context("Could not determine data directory")?;
     Ok(proj_dirs.data_dir().to_path_buf())
@@ -238,13 +266,7 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         "llama3.2",
         ApiFormat::OllamaNative,
     ),
-    (
-        "Ollama Cloud",
-        "https://ollama.com/api",
-        true,
-        "gpt-oss:120b-cloud",
-        ApiFormat::OllamaNative,
-    ),
+
     (
         "OpenRouter",
         "https://openrouter.ai/api/v1",

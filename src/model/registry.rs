@@ -101,7 +101,14 @@ async fn query_ollama_show(
     api_key: Option<&str>,
     client: &Client,
 ) -> Option<usize> {
-    let url = format!("{}/api/show", base_url.trim_end_matches('/'));
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/api/show") {
+        base.to_string()
+    } else if base.ends_with("/api") {
+        format!("{}/show", base)
+    } else {
+        format!("{}/api/show", base)
+    };
     let body = serde_json::json!({ "model": model });
 
     let mut req = client
@@ -164,7 +171,12 @@ async fn query_openai_models(
     api_key: Option<&str>,
     client: &Client,
 ) -> Option<usize> {
-    let url = format!("{}/models/{}", base_url.trim_end_matches('/'), model);
+    let base = base_url.trim_end_matches('/');
+    let url = if base.ends_with("/models") {
+        format!("{}/{}", base, model)
+    } else {
+        format!("{}/models/{}", base, model)
+    };
 
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(10));
 

@@ -79,8 +79,9 @@ irm https://raw.githubusercontent.com/poornachandra24/Helix/main/install.ps1 | i
 To run containerized without local installation:
 ```bash
 docker run -it --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/workspace \
-  -v "$HOME/.config/helix":/root/.config/helix \
+  -e HELIX_HOME=/workspace/.helix \
   ghcr.io/poornachandra24/helix:latest
 ```
 

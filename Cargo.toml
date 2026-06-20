@@ -47,12 +47,9 @@ wasmi = "0.31.2"
 wasmi_wasi = "0.31.2"
 wasi-common = "2.0.2"
 
-
-
 [target.'cfg(target_os = "linux")'.dependencies]
 blas-src = { version = "0.10", features = ["openblas"] }
-openblas-src = { version = "0.10", features = ["system"], default-features = false }
+openblas-src = { version = "0.10", features = ["static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.10", features = ["accelerate"] }
-

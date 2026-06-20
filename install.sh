@@ -144,7 +144,7 @@ chmod +x "${INSTALL_DIR}/helix"
 if ! "${INSTALL_DIR}/helix" --version >/dev/null 2>&1; then
     printf "${RED}Error: The precompiled binary is incompatible with your system's C library (GLIBC).${NC}\n" >&2
     printf "${YELLOW}This happens on older Linux distributions. We suggest running via Docker instead:${NC}\n" >&2
-    printf "  docker run -it --rm -v \"\$(pwd)\":/workspace -v \"\$HOME/.config/helix\":/root/.config/helix ghcr.io/${REPO}:latest\n\n" >&2
+    printf "  docker run -it --rm --user \"\$(id -u):\$(id -g)\" -v \"\$(pwd)\":/workspace -e HELIX_HOME=/workspace/.helix ghcr.io/${REPO}:latest\n\n" >&2
     rm -f "${INSTALL_DIR}/helix"
     exit 1
 fi

@@ -81,9 +81,24 @@ impl OpenAiCompatibleAdapter {
 
     /// Build the full endpoint URL based on the provider's `ApiFormat`.
     fn endpoint(&self, provider_base: &str, format: &ApiFormat) -> String {
+        let base = provider_base.trim_end_matches('/');
         match format {
-            ApiFormat::OpenAiCompatible => format!("{}/chat/completions", provider_base),
-            ApiFormat::OllamaNative => format!("{}/api/chat", provider_base),
+            ApiFormat::OpenAiCompatible => {
+                if base.ends_with("/chat/completions") {
+                    base.to_string()
+                } else {
+                    format!("{}/chat/completions", base)
+                }
+            }
+            ApiFormat::OllamaNative => {
+                if base.ends_with("/api/chat") {
+                    base.to_string()
+                } else if base.ends_with("/api") {
+                    format!("{}/chat", base)
+                } else {
+                    format!("{}/api/chat", base)
+                }
+            }
         }
     }
 

@@ -40,8 +40,9 @@ If you prefer not to install any binaries on your host machine, you can pull the
 **macOS & Linux:**
 ```bash
 docker run -it --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$(pwd)":/workspace \
-  -v "$HOME/.config/helix":/root/.config/helix \
+  -e HELIX_HOME=/workspace/.helix \
   ghcr.io/poornachandra24/helix
 ```
 
@@ -49,7 +50,7 @@ docker run -it --rm \
 ```powershell
 docker run -it --rm `
   -v "${PWD}:/workspace" `
-  -v "${HOME}/.config/helix:/root/.config/helix" `
+  -e HELIX_HOME=/workspace/.helix `
   ghcr.io/poornachandra24/helix
 ```
 
