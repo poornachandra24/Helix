@@ -130,6 +130,30 @@ jobs:
           find artifacts -name "helix-*" -exec cp {} release_files/ \;
           ls -la release_files/
 
+      - name: Extract Release Notes from Changelog
+        run: |
+          python3 -c '
+          import re, os
+          tag = "${{ github.ref_name }}"
+          version = tag.lstrip("v")
+          written = False
+          if os.path.exists("CHANGELOG.md"):
+              with open("CHANGELOG.md", "r") as f:
+                  content = f.read()
+              pattern = rf"(## \[{re.escape(version)}\].*?)(?=\n## \[|\Z)"
+              match = re.search(pattern, content, re.DOTALL)
+              if match:
+                  notes = match.group(1).strip()
+                  if notes.endswith("---"):
+                      notes = notes[:-3].strip()
+                  with open("release_notes.md", "w") as out:
+                      out.write(notes)
+                  written = True
+          if not written:
+              with open("release_notes.md", "w") as out:
+                  out.write("Release " + tag)
+          '
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -139,7 +163,7 @@ jobs:
             release_files/*.sha256
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body_path: release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
