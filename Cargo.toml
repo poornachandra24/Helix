@@ -1,6 +1,6 @@
 [package]
 name = "helix"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Poornachandra <poornachandra24@users.noreply.github.com>"]
 description = "A tiny, self-evolving autonomous AI agent harness"
