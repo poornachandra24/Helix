@@ -2,7 +2,6 @@ use anyhow::Result;
 use console::style;
 use owo_colors::OwoColorize;
 use std::io::{self, Write};
-use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
@@ -20,6 +19,18 @@ use super::helpers::{
     build_context, build_model, build_system_prompt, build_tool_registry, count_omitted_turns,
     init_mcp_tools, load_sona_state, print_banner, print_status_card, save_sona_state, wrap_text,
 };
+
+/// Returns the usable content width for boxed output, re-queried live so
+/// resizing the terminal mid-session is automatically reflected next turn.
+#[inline]
+fn get_content_width() -> usize {
+    let cols = console::Term::stdout()
+        .size_checked()
+        .map(|(_, c)| c as usize)
+        .unwrap_or(80);
+    // Leave 8 columns for the box borders + padding, floor at 40.
+    cols.saturating_sub(8).max(40)
+}
 
 fn print_help() {
     use comfy_table::presets::NOTHING;
@@ -87,6 +98,105 @@ fn print_help() {
     println!("{table}");
 }
 
+fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
+    let mut commands = vec![
+        ("/help".to_string(), "show this command guide".to_string()),
+        ("/status".to_string(), "show active model, context budget, SONA & optimization stats".to_string()),
+        ("/clear".to_string(), "reset current chat history context".to_string()),
+        ("/config".to_string(), "reconfigure active provider / model".to_string()),
+        ("/providers".to_string(), "list configured API providers".to_string()),
+        ("/use <name> [model]".to_string(), "hot-switch provider/model in the current session".to_string()),
+        ("/sessions".to_string(), "list previous chat sessions".to_string()),
+        ("/resume <id>".to_string(), "load a past session into the active context".to_string()),
+        ("/memory [query]".to_string(), "search/manage semantic memory (use --clear to wipe)".to_string()),
+        ("/thinking [level]".to_string(), "set or show reasoning effort/budget".to_string()),
+        ("/optimize".to_string(), "force SONA neural adaptation & parameter consolidation".to_string()),
+        ("/exit".to_string(), "exit the REPL session".to_string()),
+        ("/quit".to_string(), "exit the REPL session".to_string()),
+    ];
+
+    let query = input.to_lowercase();
+    if "/resume".starts_with(&query) || query.starts_with("/resume") {
+        if let Ok(sessions) = crate::core::persistence::list_sessions() {
+            for s in sessions.iter().take(3) {
+                commands.push((
+                    format!("/resume {}", s.id),
+                    format!("resume session from {}", s.modified_at.format("%Y-%m-%d %H:%M")),
+                ));
+            }
+        }
+    }
+
+    commands
+        .into_iter()
+        .filter(|(cmd, _)| {
+            let cmd_clean = cmd.split_whitespace().next().unwrap_or("");
+            query == "/" || cmd_clean.starts_with(&query) || query.starts_with(cmd_clean)
+        })
+        .collect()
+}
+
+fn render_suggestions_inline(
+    input: &str,
+    selected_index: Option<usize>,
+    prev_suggestions_printed: &mut bool,
+) -> io::Result<()> {
+    print!("\x1b[J");
+    *prev_suggestions_printed = false;
+
+    if !input.starts_with('/') {
+        return Ok(());
+    }
+
+    let matches = get_matching_commands_inline(input);
+    if matches.is_empty() {
+        return Ok(());
+    }
+
+    print!("\x1b[s");
+    
+    print!("\r\n");
+    print!("  {}\r\n", style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold());
+    print!("  {}\r\n", style("─".repeat(50)).dimmed());
+    for (i, (cmd, desc)) in matches.iter().enumerate() {
+        if Some(i) == selected_index {
+            print!(
+                "  {} {:22}  {}  {}\r\n",
+                style("▶").green().bold(),
+                style(cmd).green().bold(),
+                style("—").green(),
+                style(desc).green().bold()
+            );
+        } else {
+            print!(
+                "    {:22}  {}  {}\r\n",
+                style(cmd).cyan(),
+                style("—").color256(240),
+                style(desc).white()
+            );
+        }
+    }
+
+    print!("\x1b[u");
+    io::stdout().flush()?;
+    *prev_suggestions_printed = true;
+
+    Ok(())
+}
+
+struct RawModeGuard;
+impl RawModeGuard {
+    fn new() -> Self {
+        let _ = crossterm::terminal::enable_raw_mode();
+        Self
+    }
+}
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
 pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<String>) -> Result<()> {
     // Banner is printed after engine is built so we can pass session/memory/SONA info
     let start_time = chrono::Local::now();
@@ -118,7 +228,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         CRITICAL FORMATTING RULES FOR TERMINAL ENVIRONMENT:\n\
         1. DO NOT USE MARKDOWN TABLES (e.g. '| Header | Header |') because they get severely mangled and wrapped when displayed inside the terminal's narrow fixed-width box layout (typically 80-110 characters). Instead, represent tabular data using nested bullet points, bold key-value listings, or record blocks (e.g. '◆ Record 1:\n  * Key: Value').\n\
         2. Keep horizontal lines and separators short. DO NOT output long horizontal line dashes like '------------------------------' or ASCII art. Keep horizontal dividers short, e.g., '---'.\n\
-        3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.";
+        3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.\n\
+        4. DO NOT try to scrape search engines, media sites, or streaming/video sites (like YouTube, Google, etc.) using the 'web_fetch' tool. These sites block simple automated requests with CAPTCHAs or 403 Forbidden errors. Instead, suggest search options or search queries to the user, or rely on existing knowledge.";
 
     let system_prompt = build_system_prompt(base_system, &skill_reg);
 
@@ -204,9 +315,13 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         &active_skills,
     );
 
-    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+    // Enable bracketed paste mode
+    print!("\x1b[?2004h");
+    let _ = io::stdout().flush();
+
 
     loop {
+
         let msg_tokens: usize = engine
             .global_messages
             .iter()
@@ -224,6 +339,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             style(format!("{:.1}%", pct)).color256(150)
         };
 
+        let mut input = String::new();
+        let mut prev_suggestions_printed = false;
+        let mut selected_index: Option<usize> = None;
+
         print!(
             "\n{} {} {} {} ",
             style("◆").cyan(),
@@ -233,40 +352,189 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         );
         io::stdout().flush()?;
 
-        let mut input = String::new();
-        tokio::select! {
-            res = reader.read_line(&mut input) => {
-                let bytes_read = res?;
-                if bytes_read == 0 {
-                    generate_and_save_reflection(&mut engine).await;
-                    exit_gracefully(&engine, start_time);
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                println!();
-                let confirm = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                    .with_prompt("Do you want to exit?")
-                    .default(false)
-                    .show_default(true)
-                    .interact_opt();
+        {
+            let _raw_guard = RawModeGuard::new();
+            print!("\x1b[?2004h");
+            let _ = io::stdout().flush();
 
-                match confirm {
-                    Ok(Some(true)) => {
-                        generate_and_save_reflection(&mut engine).await;
-                        exit_gracefully(&engine, start_time);
-                    }
-                    Ok(Some(false)) => {
-                        println!("{}", style("Exiting cancelled. Returning to chat.").dimmed());
-                        continue;
-                    }
+            loop {
+                let event = match tokio::task::spawn_blocking(|| {
+                    crossterm::event::read()
+                })
+                .await
+                {
+                    Ok(Ok(ev)) => ev,
                     _ => {
-                        // User pressed Ctrl+C again (None) or some error occurred
                         generate_and_save_reflection(&mut engine).await;
                         exit_gracefully(&engine, start_time);
                     }
+                };
+
+                match event {
+                    crossterm::event::Event::Key(key_event) => {
+                        if key_event.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+                            match key_event.code {
+                                crossterm::event::KeyCode::Char('c') => {
+                                    print!("\r\n");
+                                    if prev_suggestions_printed {
+                                        print!("\x1b[J");
+                                        prev_suggestions_printed = false;
+                                    }
+                                    print!("\x1b[?2004l");
+                                    let _ = io::stdout().flush();
+
+                                    let _ = crossterm::terminal::disable_raw_mode();
+                                    let confirm = dialoguer::Confirm::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                                        .with_prompt("Do you want to exit?")
+                                        .default(false)
+                                        .show_default(true)
+                                        .interact_opt();
+                                    let _ = crossterm::terminal::enable_raw_mode();
+
+                                    match confirm {
+                                        Ok(Some(true)) => {
+                                            generate_and_save_reflection(&mut engine).await;
+                                            exit_gracefully(&engine, start_time);
+                                        }
+                                        _ => {
+                                            print!("{}\r\n", style("Exiting cancelled. Returning to chat.").dimmed());
+                                            print!("\x1b[?2004h");
+                                            let _ = io::stdout().flush();
+                                            print!(
+                                                "\r\x1b[K{} {} {} {} {}",
+                                                style("◆").cyan(),
+                                                style("helix").white().bold(),
+                                                style(format!("(ctx: {})", pct_color)).dimmed(),
+                                                style("›").blue().bold(),
+                                                input
+                                            );
+                                            io::stdout().flush()?;
+                                            render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                crossterm::event::KeyCode::Char('d') => {
+                                    if input.is_empty() {
+                                        print!("\r\n");
+                                        generate_and_save_reflection(&mut engine).await;
+                                        exit_gracefully(&engine, start_time);
+                                    }
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key_event.code {
+                                crossterm::event::KeyCode::Char(c) => {
+                                    selected_index = None;
+                                    input.push(c);
+                                    print!("{}", c);
+                                    io::stdout().flush()?;
+                                    render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                }
+                                crossterm::event::KeyCode::Backspace => {
+                                    selected_index = None;
+                                    if !input.is_empty() {
+                                        input.pop();
+                                        print!("\x1b[1D \x1b[1D");
+                                        io::stdout().flush()?;
+                                        render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                    }
+                                }
+                                crossterm::event::KeyCode::Down => {
+                                    if prev_suggestions_printed {
+                                        let matches = get_matching_commands_inline(&input);
+                                        if !matches.is_empty() {
+                                            let next_idx = match selected_index {
+                                                Some(idx) => (idx + 1) % matches.len(),
+                                                None => 0,
+                                            };
+                                            selected_index = Some(next_idx);
+                                            render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                        }
+                                    }
+                                }
+                                crossterm::event::KeyCode::Up => {
+                                    if prev_suggestions_printed {
+                                        let matches = get_matching_commands_inline(&input);
+                                        if !matches.is_empty() {
+                                            let next_idx = match selected_index {
+                                                Some(idx) => {
+                                                    if idx == 0 {
+                                                        matches.len() - 1
+                                                    } else {
+                                                        idx - 1
+                                                    }
+                                                }
+                                                None => matches.len() - 1,
+                                            };
+                                            selected_index = Some(next_idx);
+                                            render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                        }
+                                    }
+                                }
+                                crossterm::event::KeyCode::Tab => {
+                                    if input.starts_with('/') {
+                                        let matches = get_matching_commands_inline(&input);
+                                        if !matches.is_empty() {
+                                            let idx = selected_index.unwrap_or(0);
+                                            if idx < matches.len() {
+                                                let first_match = &matches[idx].0;
+                                                for _ in 0..input.len() {
+                                                    print!("\x1b[1D \x1b[1D");
+                                                }
+                                                input = first_match.to_string();
+                                                if input == "/resume" || input == "/use" || input == "/memory" || input == "/thinking" {
+                                                    input.push(' ');
+                                                }
+                                                selected_index = None;
+                                                print!("{}", input);
+                                                io::stdout().flush()?;
+                                                render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                                            }
+                                        }
+                                    }
+                                }
+                                crossterm::event::KeyCode::Enter => {
+                                    if prev_suggestions_printed {
+                                        if let Some(idx) = selected_index {
+                                            let matches = get_matching_commands_inline(&input);
+                                            if idx < matches.len() {
+                                                let chosen = &matches[idx].0;
+                                                for _ in 0..input.len() {
+                                                    print!("\x1b[1D \x1b[1D");
+                                                }
+                                                input = chosen.to_string();
+                                                print!("{}", input);
+                                                io::stdout().flush()?;
+                                            }
+                                        }
+                                        print!("\x1b[J");
+                                        io::stdout().flush()?;
+                                    }
+                                    print!("\r\n");
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    crossterm::event::Event::Paste(text) => {
+                        input.push_str(&text);
+                        print!("{}", text);
+                        io::stdout().flush()?;
+                        selected_index = None;
+                        render_suggestions_inline(&input, selected_index, &mut prev_suggestions_printed)?;
+                    }
+                    _ => {}
                 }
             }
         }
+
+        print!("\x1b[?2004l");
+        let _ = io::stdout().flush();
+
         let trimmed = input.trim();
 
         match trimmed {
@@ -279,7 +547,16 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                 continue;
             }
             "/clear" => {
-                generate_and_save_reflection(&mut engine).await;
+                let msgs = engine.global_messages.clone();
+                let session_id = engine.session.id.clone();
+                let config = app_config.clone();
+                let memory_dir = data_dir.clone().join("memory");
+                tokio::spawn(async move {
+                    let model = build_model(&config);
+                    if let Ok(memory_engine) = memory::HelixMemoryEngine::new(&memory_dir) {
+                        generate_and_save_reflection_bg(model, memory_engine, msgs, session_id).await;
+                    }
+                });
                 engine.global_messages.clear();
                 println!("{}", style("✔ Context cleared.").green());
                 continue;
@@ -551,6 +828,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
 
         // ── /config ───────────────────────────────────────────
         if trimmed == "/config" {
+            // Disable bracketed paste mode during setup
+            print!("\x1b[?2004l");
+            let _ = io::stdout().flush();
+
             match config::interactive_setup(Some(app_config.clone())) {
                 Ok(new_config) => {
                     app_config = new_config.clone();
@@ -580,6 +861,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                     );
                 }
             }
+
+            // Re-enable bracketed paste mode
+            print!("\x1b[?2004h");
+            let _ = io::stdout().flush();
             continue;
         }
 
@@ -738,15 +1023,44 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             continue;
         }
 
-        // ── /resume <id> ──────────────────────────────────────
-        if let Some(id) = trimmed.strip_prefix("/resume ") {
-            let id = id.trim();
+        // ── /resume [id] ──────────────────────────────────────
+        if trimmed == "/resume" || trimmed.starts_with("/resume ") {
+            let id = trimmed.strip_prefix("/resume").unwrap_or("").trim();
+            if id.is_empty() {
+                match persistence::list_sessions() {
+                    Ok(sessions) => {
+                        if sessions.is_empty() {
+                            println!("{}", style("No saved sessions found.").yellow());
+                        } else {
+                            println!("\n  {}", style("Recent sessions (newest first):").cyan().bold());
+                            println!("  {}", style("─".repeat(50)).dimmed());
+                            for s in sessions.iter().take(3) {
+                                println!(
+                                    "    {}  —  {} events, last active: {}",
+                                    style(&s.id).cyan(),
+                                    style(s.event_count).white(),
+                                    style(s.modified_at.format("%Y-%m-%d %H:%M")).dimmed()
+                                );
+                            }
+                            println!("\n  Use {} to load one.\n", "/resume <id>".yellow());
+                        }
+                    }
+                    Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
+                }
+                continue;
+            }
+
             match persistence::list_sessions() {
                 Ok(sessions) => {
                     if let Some(meta) = sessions.into_iter().find(|s| s.id == id) {
                         match persistence::Session::load_messages(&meta.path) {
                             Ok(msgs) => {
                                 engine.global_messages = msgs;
+                                engine.session.id = id.to_string();
+                                engine.session.path = meta.path.clone();
+                                if let Some(ref mut m) = engine.metrics {
+                                    m.session_id = id.to_string();
+                                }
                                 println!(
                                     "{}",
                                     style(format!(
@@ -822,16 +1136,35 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             continue;
         }
 
+        if trimmed.starts_with('/') {
+            let matches = get_matching_commands_inline(trimmed);
+            if trimmed != "/" {
+                println!(
+                    "\n  {} {}",
+                    style("❌ Unknown or incomplete command:").red(),
+                    style(trimmed).yellow()
+                );
+            }
+
+            println!("\n  {}", style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold());
+            println!("  {}", style("─".repeat(50)).dimmed());
+
+            for (cmd, desc) in &matches {
+                println!(
+                    "    {:22}  {}  {}",
+                    style(cmd).cyan(),
+                    style("—").color256(240),
+                    style(desc).white()
+                );
+            }
+            println!();
+            continue;
+        }
+
         // ── Normal turn with streaming output ─────────────────
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
-        let terminal_width = if let Some((_, cols)) = console::Term::stdout().size_checked() {
-            cols as usize
-        } else {
-            80
-        };
-        // Clamp content_width between 50 and 110 (preventing too-wide layouts on huge screens)
-        let content_width = terminal_width.saturating_sub(8).clamp(50, 110);
+        let content_width = get_content_width();
 
         // Print User Input Box — cool blue/cyan scheme (adapts to terminal theme)
         let user_border = |s: &str| s.blue().to_string();
@@ -1105,6 +1438,12 @@ fn exit_gracefully(engine: &engine::Engine, start_time: chrono::DateTime<Local>)
         format!("{}s", duration.num_seconds())
     };
 
+    // Restore terminal to cooked mode BEFORE printing so that println! newlines
+    // land at column 0 correctly (raw mode requires explicit \r\n otherwise).
+    let _ = crossterm::terminal::disable_raw_mode();
+    print!("\x1b[?2004l");
+    let _ = io::stdout().flush();
+
     println!();
     println!("{}", style("Resume this session with:").bold().cyan());
     println!("  helix --resume {}", engine.session.id);
@@ -1168,7 +1507,6 @@ fn print_boxed_response(content_width: usize, full_response: &str, elapsed_str: 
 }
 
 struct StreamTracker {
-    content_width: usize,
     current_line: String,
     printed_lines: usize,
     started: bool,
@@ -1176,9 +1514,8 @@ struct StreamTracker {
 }
 
 impl StreamTracker {
-    fn new(content_width: usize) -> Self {
+    fn new(_content_width: usize) -> Self {
         Self {
-            content_width,
             current_line: String::new(),
             printed_lines: 0,
             started: false,
@@ -1190,8 +1527,9 @@ impl StreamTracker {
         let border_color_fn = |s: &str| s.yellow().to_string();
         let header_color_fn = |s: &str| s.yellow().bold().to_string();
 
+        let content_width = get_content_width();
         let title = "Helix";
-        let dashes_count = self.content_width.saturating_sub(title.len());
+        let dashes_count = content_width.saturating_sub(title.len());
         print!("  ");
         print!("{}", border_color_fn("╭── "));
         print!("{}", header_color_fn(title));
@@ -1212,6 +1550,7 @@ impl StreamTracker {
             self.start();
         }
 
+        let content_width = get_content_width();
         let parts: Vec<&str> = token.split('\n').collect();
         for (i, part) in parts.iter().enumerate() {
             if i > 0 {
@@ -1220,14 +1559,14 @@ impl StreamTracker {
 
             self.current_line.push_str(part);
 
-            while self.current_line.width() > self.content_width {
+            while self.current_line.width() > content_width {
                 let mut last_space_idx = None;
                 let chars: Vec<char> = self.current_line.chars().collect();
                 let mut prefix_width = 0;
                 let mut fit_char_count = 0;
                 for (idx, &c) in chars.iter().enumerate() {
                     let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                    if prefix_width + w > self.content_width {
+                    if prefix_width + w > content_width {
                         break;
                     }
                     prefix_width += w;
@@ -1246,8 +1585,11 @@ impl StreamTracker {
                 let fit: String = chars[..split_idx].iter().collect();
                 let rem: String = chars[split_idx..].iter().collect();
 
+                let fit_clean = console::strip_ansi_codes(&fit);
+                let fit_display_w = fit_clean.width();
+                let fit_pad = content_width.saturating_sub(fit_display_w);
                 print!("\r\x1B[K");
-                println!("  {}  {}", self.pipe, fit);
+                println!("  {}  {}{}  {}", self.pipe, fit, " ".repeat(fit_pad), self.pipe);
                 self.printed_lines += 1;
 
                 self.current_line = rem;
@@ -1261,8 +1603,12 @@ impl StreamTracker {
     }
 
     fn flush_current_line(&mut self) {
+        let content_width = get_content_width();
+        let clean = console::strip_ansi_codes(&self.current_line);
+        let display_w = clean.width();
+        let pad = content_width.saturating_sub(display_w);
         print!("\r\x1B[K");
-        println!("  {}  {}", self.pipe, self.current_line);
+        println!("  {}  {}{}  {}", self.pipe, self.current_line, " ".repeat(pad), self.pipe);
         self.printed_lines += 1;
         self.current_line.clear();
         print!("  {}  ", self.pipe);
@@ -1273,8 +1619,12 @@ impl StreamTracker {
         if !self.started {
             return;
         }
-        print!("\n\x1B[K");
-        println!("  {}  {}", self.pipe, self.current_line);
+        let content_width = get_content_width();
+        let clean = console::strip_ansi_codes(&self.current_line);
+        let display_w = clean.width();
+        let pad = content_width.saturating_sub(display_w);
+        print!("\r\x1B[K");
+        println!("  {}  {}{}  {}", self.pipe, self.current_line, " ".repeat(pad), self.pipe);
         self.printed_lines += 1;
         self.current_line.clear();
         std::io::stdout().flush().ok();
@@ -1331,11 +1681,8 @@ async fn generate_and_save_reflection(engine: &mut engine::Engine) {
                                 summary_path.display()
                             );
                             if let Some(ref mut memory_engine) = engine.memory {
-                                let workspace_path = std::env::current_dir()
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_default();
                                 if let Err(e) =
-                                    memory_engine.insert(&summary_text, None, &workspace_path)
+                                    memory_engine.insert(&summary_text, None, "global")
                                 {
                                     eprintln!("⚠️  Failed to index reflective memory: {}", e);
                                 } else {
@@ -1351,6 +1698,69 @@ async fn generate_and_save_reflection(engine: &mut engine::Engine) {
         }
         Err(e) => {
             eprintln!("⚠️  [Memory] Failed to generate reflection: {}", e);
+        }
+    }
+}
+
+async fn generate_and_save_reflection_bg(
+    model: Box<dyn crate::model::ModelAdapter>,
+    mut memory_engine: memory::HelixMemoryEngine,
+    global_messages: Vec<serde_json::Value>,
+    session_id: String,
+) {
+    if global_messages.is_empty() {
+        return;
+    }
+
+    let user_msg_count = global_messages
+        .iter()
+        .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .count();
+    if user_msg_count == 0 {
+        return;
+    }
+
+    let post_mortem_prompt = "You are a professional software engineer summarizing a pair programming session. \
+        Generate a high-signal markdown document summarizing this coding session. \
+        Be extremely concise and professional, strictly limiting the summary to under 300 words. \
+        Avoid any introductory or closing chatter. \
+        Use the following format:\n\
+        # Session Summary: [Brief Title]\n\
+        - **Core Goal**: [One sentence describing the objective]\n\
+        - **Successful Implementations**: [Bullet list of verified changes, tools, or commands that worked successfully]\n\
+        - **Errors & Blockers Resolved**: [Bullet list of issues encountered and how they were solved]\n\
+        - **Key Context Patterns**: [Bullet list of architectural or path conventions discovered]";
+
+    match model
+        .call(post_mortem_prompt, &global_messages, vec![], None)
+        .await
+    {
+        Ok(model_response) => {
+            if let crate::model::ModelResponse::EndTurn(summary_text) = model_response {
+                if !summary_text.trim().is_empty() {
+                    if let Ok(state_dir) = config::get_state_dir() {
+                        let memory_sessions_dir = state_dir.join("memory").join("sessions");
+                        if let Err(e) = std::fs::create_dir_all(&memory_sessions_dir) {
+                            eprintln!("⚠️  Failed to create memory directory in background: {}", e);
+                            return;
+                        }
+                        let summary_path =
+                            memory_sessions_dir.join(format!("{}.md", session_id));
+                        if let Err(e) = std::fs::write(&summary_path, &summary_text) {
+                            eprintln!("⚠️  Failed to write reflection summary in background: {}", e);
+                        } else {
+                            if let Err(e) =
+                                memory_engine.insert(&summary_text, None, "global")
+                            {
+                                eprintln!("⚠️  Failed to index reflective memory in background: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("⚠️  [Memory] Failed to generate reflection in background: {}", e);
         }
     }
 }
