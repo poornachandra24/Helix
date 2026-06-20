@@ -497,6 +497,14 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         if !resp_val.status().is_success() {
             let status = resp_val.status();
             let body = resp_val.text().await.unwrap_or_default();
+            if status == reqwest::StatusCode::UNAUTHORIZED && provider.name == "Ollama Cloud" {
+                anyhow::bail!(
+                    "Ollama Cloud authentication failed (401 Unauthorized).\n\n\
+                     Please verify that:\n\
+                     1. You have a valid Ollama account on https://ollama.com\n\
+                     2. You have configured a valid API key for Ollama Cloud in Helix (using `/config` or via config.toml)."
+                );
+            }
             anyhow::bail!("API returned error status {}: {}", status, body);
         }
 

@@ -296,6 +296,40 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
     ),
 ];
 
+fn validate_provider_connectivity(provider: &Provider) {
+    let provider = provider.clone();
+    let _ = std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+        rt.block_on(async {
+            let client = Client::new();
+            if !check_provider_health(&client, &provider).await {
+                println!();
+                println!("  ⚠️  {}", console::style("Connection/Auth Warning:").yellow().bold());
+                println!("     Could not establish a successful connection to: {}", provider.base_url);
+                if provider.name == "Ollama Cloud" {
+                    println!("     For Ollama Cloud, please verify you have:");
+                    println!("       1. Created an account on https://ollama.com");
+                    println!("       2. Generated an API key from your profile settings");
+                    println!("       3. Entered this key during the setup prompt or set it in your config.toml");
+                } else if provider.name == "Ollama (Local)" {
+                    println!("     Please verify that your local Ollama instance is running.");
+                    println!("     If you are running Helix inside a Docker container, 'localhost' points to the container.");
+                    println!("     To connect to your host machine's Ollama, use:");
+                    println!("       - Linux: http://172.17.0.1:11434");
+                    println!("       - macOS/Windows: http://host.docker.internal:11434");
+                }
+                println!();
+            }
+        });
+    }).join();
+}
+
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
     let selections: Vec<String> = PROVIDER_TEMPLATES
         .iter()
@@ -390,11 +424,12 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
 
     config.providers.retain(|p| p.name != provider.name);
     config.providers.push(provider.clone());
-    config.active_provider = provider.name;
+    config.active_provider = provider.name.clone();
     config.active_model = model_name;
 
     config.save()?;
     println!("\n✅ Configuration updated and saved!");
+    validate_provider_connectivity(&provider);
     Ok(config)
 }
 
