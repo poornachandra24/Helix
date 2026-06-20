@@ -71,6 +71,15 @@ impl Engine {
         }
     }
 
+    /// Dynamically updates the engine's active tool registry at runtime.
+    /// Re-evaluates token counts for the new tool descriptors and adjusts the active context budget accordingly.
+    pub fn update_tools(&mut self, tools: ToolRegistry) {
+        let descs = tools.descriptors();
+        self.tools = Arc::new(tools);
+        self.context.budget.tool_descriptor_tokens =
+            crate::core::context::TokenEstimator::estimate_tool_descriptors(&descs);
+    }
+
     pub fn with_memory(mut self, mut memory: crate::memory::HelixMemoryEngine) -> Self {
         let candidates = vec![
             ("hi", "Hello! How can I help you today?"),

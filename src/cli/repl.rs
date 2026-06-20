@@ -97,7 +97,18 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
     let session = persistence::Session::new(resume_id.as_deref())?;
     let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
     let mut tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
-    let _mcp_registry = init_mcp_tools(&mut tools).await?;
+    let mut _mcp_registry = init_mcp_tools(&mut tools).await?;
+    let mcp_config_path = std::path::Path::new("mcp_config.json");
+    let user_mcp_config_path = config::get_config_dir()?.join("mcp_config.json");
+    let active_mcp_path = if mcp_config_path.exists() {
+        mcp_config_path.to_path_buf()
+    } else {
+        user_mcp_config_path
+    };
+    let mut last_mcp_modified = active_mcp_path
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok());
     let memory_dir = data_dir.join("memory");
     let memory_engine = memory::HelixMemoryEngine::new(&memory_dir)?;
 
@@ -227,6 +238,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             res = reader.read_line(&mut input) => {
                 let bytes_read = res?;
                 if bytes_read == 0 {
+                    generate_and_save_reflection(&mut engine).await;
                     exit_gracefully(&engine, start_time);
                 }
             }
@@ -240,6 +252,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
 
                 match confirm {
                     Ok(Some(true)) => {
+                        generate_and_save_reflection(&mut engine).await;
                         exit_gracefully(&engine, start_time);
                     }
                     Ok(Some(false)) => {
@@ -248,6 +261,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                     }
                     _ => {
                         // User pressed Ctrl+C again (None) or some error occurred
+                        generate_and_save_reflection(&mut engine).await;
                         exit_gracefully(&engine, start_time);
                     }
                 }
@@ -256,12 +270,16 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         let trimmed = input.trim();
 
         match trimmed {
-            "exit" | "quit" | "/exit" | "/quit" => exit_gracefully(&engine, start_time),
+            "exit" | "quit" | "/exit" | "/quit" => {
+                generate_and_save_reflection(&mut engine).await;
+                exit_gracefully(&engine, start_time);
+            }
             "/help" => {
                 print_help();
                 continue;
             }
             "/clear" => {
+                generate_and_save_reflection(&mut engine).await;
                 engine.global_messages.clear();
                 println!("{}", style("✔ Context cleared.").green());
                 continue;
@@ -1022,6 +1040,28 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         if let Some(ref sona) = engine.sona {
             save_sona_state(&data_dir, sona);
         }
+
+        // Check if MCP configuration file was modified during the turn (Safe Reload Scheduler)
+        let current_mcp_modified = active_mcp_path
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok());
+
+        if current_mcp_modified != last_mcp_modified {
+            println!("\n🔄 [MCP] Detected changes in mcp_config.json. Scheduling safe reload...");
+            let mut new_tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
+            match init_mcp_tools(&mut new_tools).await {
+                Ok(new_mcp_registry) => {
+                    _mcp_registry = new_mcp_registry; // Drops the old registry and kills old processes
+                    engine.update_tools(new_tools);
+                    last_mcp_modified = current_mcp_modified;
+                    println!("✔ [MCP] Configuration reloaded and tools updated successfully!");
+                }
+                Err(e) => {
+                    eprintln!("⚠️  [MCP] Failed to reload configuration: {}", e);
+                }
+            }
+        }
     }
 
     #[allow(unreachable_code)]
@@ -1233,10 +1273,84 @@ impl StreamTracker {
         if !self.started {
             return;
         }
-        print!("\r\x1B[K");
+        print!("\n\x1B[K");
         println!("  {}  {}", self.pipe, self.current_line);
         self.printed_lines += 1;
         self.current_line.clear();
         std::io::stdout().flush().ok();
+    }
+}
+
+async fn generate_and_save_reflection(engine: &mut engine::Engine) {
+    if engine.global_messages.is_empty() {
+        return;
+    }
+
+    let user_msg_count = engine
+        .global_messages
+        .iter()
+        .filter(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .count();
+    if user_msg_count == 0 {
+        return;
+    }
+
+    println!("\n🧠 [Memory] Generating session reflection summary...");
+    let post_mortem_prompt = "You are a professional software engineer summarizing a pair programming session. \
+        Generate a high-signal markdown document summarizing this coding session. \
+        Be extremely concise and professional, strictly limiting the summary to under 300 words. \
+        Avoid any introductory or closing chatter. \
+        Use the following format:\n\
+        # Session Summary: [Brief Title]\n\
+        - **Core Goal**: [One sentence describing the objective]\n\
+        - **Successful Implementations**: [Bullet list of verified changes, tools, or commands that worked successfully]\n\
+        - **Errors & Blockers Resolved**: [Bullet list of issues encountered and how they were solved]\n\
+        - **Key Context Patterns**: [Bullet list of architectural or path conventions discovered]";
+
+    match engine
+        .model
+        .call(post_mortem_prompt, &engine.global_messages, vec![], None)
+        .await
+    {
+        Ok(model_response) => {
+            if let crate::model::ModelResponse::EndTurn(summary_text) = model_response {
+                if !summary_text.trim().is_empty() {
+                    if let Ok(state_dir) = config::get_state_dir() {
+                        let memory_sessions_dir = state_dir.join("memory").join("sessions");
+                        if let Err(e) = std::fs::create_dir_all(&memory_sessions_dir) {
+                            eprintln!("⚠️  Failed to create memory directory: {}", e);
+                            return;
+                        }
+                        let summary_path =
+                            memory_sessions_dir.join(format!("{}.md", engine.session.id));
+                        if let Err(e) = std::fs::write(&summary_path, &summary_text) {
+                            eprintln!("⚠️  Failed to write reflection summary: {}", e);
+                        } else {
+                            println!(
+                                "✔ [Memory] Reflection summary saved to: {}",
+                                summary_path.display()
+                            );
+                            if let Some(ref mut memory_engine) = engine.memory {
+                                let workspace_path = std::env::current_dir()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                if let Err(e) =
+                                    memory_engine.insert(&summary_text, None, &workspace_path)
+                                {
+                                    eprintln!("⚠️  Failed to index reflective memory: {}", e);
+                                } else {
+                                    println!(
+                                        "✔ [Memory] Reflective summary indexed successfully in local semantic memory!"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("⚠️  [Memory] Failed to generate reflection: {}", e);
+        }
     }
 }
