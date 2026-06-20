@@ -71,9 +71,13 @@ pub struct OpenAiCompatibleAdapter {
 impl OpenAiCompatibleAdapter {
     pub fn new(config: AppConfig) -> Self {
         let level = config.thinking_level.clone();
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             config,
-            client: Client::new(),
+            client,
             resolved_provider: tokio::sync::Mutex::new(None),
             thinking_level: std::sync::RwLock::new(level),
         }

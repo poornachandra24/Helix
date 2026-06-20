@@ -197,7 +197,7 @@ impl HelixMemoryEngine {
                 "SELECT id, text, file_path, bm25(memory_fts) as score \
                  FROM memory_fts \
                  JOIN memory_metadata ON memory_metadata.id = memory_fts.rowid \
-                 WHERE memory_metadata.workspace_path = ? AND memory_fts MATCH ? \
+                 WHERE (memory_metadata.workspace_path = ? OR memory_metadata.workspace_path = 'global') AND memory_fts MATCH ? \
                  ORDER BY score ASC LIMIT ?",
             ) {
                 if let Ok(mut rows) =
@@ -230,10 +230,10 @@ impl HelixMemoryEngine {
                     }
                 }
 
-                // Retrieve candidate row IDs for the active workspace
+                // Retrieve candidate row IDs for the active workspace and global memories
                 if let Ok(mut stmt) = self
                     .db
-                    .prepare("SELECT id FROM memory_metadata WHERE workspace_path = ?")
+                    .prepare("SELECT id FROM memory_metadata WHERE workspace_path = ? OR workspace_path = 'global'")
                 {
                     if let Ok(sqlite_ids) =
                         stmt.query_map([workspace_path], |row| row.get::<_, u64>(0))
