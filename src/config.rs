@@ -197,7 +197,8 @@ pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool
 
 pub fn get_config_dir() -> Result<PathBuf> {
     if let Ok(val) = std::env::var("HELIX_HOME") {
-        if !val.trim().is_empty() {
+        let val = val.trim();
+        if !val.is_empty() {
             return Ok(PathBuf::from(val).join("config"));
         }
     }
@@ -208,7 +209,8 @@ pub fn get_config_dir() -> Result<PathBuf> {
 
 pub fn get_state_dir() -> Result<PathBuf> {
     if let Ok(val) = std::env::var("HELIX_HOME") {
-        if !val.trim().is_empty() {
+        let val = val.trim();
+        if !val.is_empty() {
             return Ok(PathBuf::from(val).join("state"));
         }
     }
@@ -222,12 +224,13 @@ pub fn get_state_dir() -> Result<PathBuf> {
 
 pub fn get_data_dir() -> Result<PathBuf> {
     if let Ok(val) = std::env::var("HELIX_HOME") {
-        if !val.trim().is_empty() {
+        let val = val.trim();
+        if !val.is_empty() {
             return Ok(PathBuf::from(val).join("data"));
         }
     }
-    let proj_dirs = ProjectDirs::from("com", "helix", "helix")
-        .context("Could not determine data directory")?;
+    let proj_dirs =
+        ProjectDirs::from("com", "helix", "helix").context("Could not determine data directory")?;
     Ok(proj_dirs.data_dir().to_path_buf())
 }
 
@@ -239,7 +242,7 @@ pub fn load_config() -> Result<AppConfig> {
             return Ok(config);
         }
     }
-    
+
     use owo_colors::OwoColorize;
     println!();
     println!("{}", "   ██╗  ██╗███████╗██╗     ██╗██╗  ██╗".cyan().bold());
@@ -253,7 +256,7 @@ pub fn load_config() -> Result<AppConfig> {
     println!("  {}", "─────────────────────────────────────────".dimmed());
     println!("  Let's configure your primary provider and model.");
     println!();
-    
+
     interactive_setup(None)
 }
 
@@ -266,7 +269,6 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         "llama3.2",
         ApiFormat::OllamaNative,
     ),
-
     (
         "OpenRouter",
         "https://openrouter.ai/api/v1",
@@ -367,10 +369,7 @@ fn validate_provider_connectivity(provider: &Provider) {
 }
 
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
-    let selections: Vec<String> = PROVIDER_TEMPLATES
-        .iter()
-        .map(|p| p.0.to_string())
-        .collect();
+    let selections: Vec<String> = PROVIDER_TEMPLATES.iter().map(|p| p.0.to_string()).collect();
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Choose a Provider Template")

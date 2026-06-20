@@ -45,7 +45,11 @@ jobs:
         run: |
           Set-MpPreference -DisableRealtimeMonitoring $true
         shell: powershell
-
+      - name: Install gfortran (Linux Only)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
