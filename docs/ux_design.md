@@ -6,7 +6,7 @@ This document describes the terminal UI system used in `src/cli/repl.rs` and `sr
 
 ## 1. Dynamic Layout
 
-All UI element widths are computed at runtime from the terminal column count:
+All UI element widths are computed dynamically at runtime during each stream cycle from the active terminal column count. Rather than hardclamping at a maximum of 110 columns, the layout dynamically adjusts:
 
 ```rust
 let terminal_width = console::Term::stdout()
@@ -14,12 +14,18 @@ let terminal_width = console::Term::stdout()
     .map(|(_, cols)| cols as usize)
     .unwrap_or(80);
 
-let content_width = terminal_width.saturating_sub(8).clamp(50, 110);
+let content_width = terminal_width.saturating_sub(8).max(40);
 ```
 
-- **`terminal_width`**: Actual terminal columns, with fallback to 80.
-- **`content_width`**: The writable area inside a box. Clamped to `[50, 110]` to prevent layouts that are too narrow or too wide on huge displays.
-- **Outer box width**: `content_width + 8` characters (2 indent + 1 border + 1 space + content + 1 space + 1 border).
+- **`terminal_width`**: Actual terminal columns, queried live.
+- **`content_width`**: The writable area inside a box. Scales to full screen on large monitors, with a minimum fallback to 40.
+- **Outer box width**: `content_width + 8` characters.
+
+### Raw Mode & Stdin Event Loop
+The REPL uses a native `crossterm` event loop instead of synchronous blocking reads.
+- **`RawModeGuard`**: An RAII guard that manages the raw terminal transition. It automatically disables raw mode upon drop (even during panic) to prevent terminal state leakage.
+- **Bracketed Paste**: Enabled via `crossterm::event::EnableBracketedPaste`, allowing multi-line code blocks to be pasted without executing intermediate lines.
+- **Carriage Returns**: In raw mode, all newline operations must print carriage returns (`\r\n`) to prevent diagonal cascading text.
 
 ---
 
@@ -171,3 +177,13 @@ After every completed turn, the SONA engine emits a quality score representing t
 ```
 
 This is always present after every response. It is intentional — SONA records a trajectory for *every* turn to continuously improve Micro-LoRA weights for semantic memory retrieval. The quality score is color-coded: green (> 0.8), yellow (> 0.5), red (≤ 0.5).
+
+---
+
+## 8. Agent Confirmation Cards & Security Redaction
+
+To safeguard credentials and maintain formatting consistency, agent authorization confirmation prompts are styled using Comfy-Table with adaptive and redacted layouts:
+
+- **Redaction Utility (`redact_secrets`)**: Scans payloads using zero-dependency, pure standard library string parsing. It identifies environment variables, JSON headers, and Authorization Bearer schemes containing keywords like `key`, `token`, `secret`, or `password` and masks values of length 6 or greater with `***REDACTED***`.
+- **Dynamic Table Widths**: Rather than hardcoded dimensions, confirmation tables compute terminal width up to a maximum of 100 columns. The left label column is fixed to 18 characters, while the right payload column expands to occupy the remaining width. Long payloads auto-wrap within the right column's boundaries.
+
