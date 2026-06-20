@@ -45,11 +45,11 @@ jobs:
         run: |
           Set-MpPreference -DisableRealtimeMonitoring $true
         shell: powershell
-      - name: Install gfortran (Linux Only)
+      - name: Install OpenBLAS & gfortran (Linux Only)
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y gfortran
+          sudo apt-get install -y libopenblas-dev gfortran
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
