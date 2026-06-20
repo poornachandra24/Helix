@@ -18,6 +18,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   check-format:
@@ -62,7 +63,8 @@ jobs:
       - name: Disable Windows Defender
         if: matrix.os == 'windows-latest'
         run: |
-          Set-MpPreference -DisableRealtimeMonitoring $true
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
         shell: powershell
 
       - name: Install Stable Rust
@@ -99,7 +101,8 @@ jobs:
       - name: Disable Windows Defender
         if: matrix.os == 'windows-latest'
         run: |
-          Set-MpPreference -DisableRealtimeMonitoring $true
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
         shell: powershell
 
       - name: Install Stable Rust
