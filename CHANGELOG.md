@@ -4,6 +4,13 @@ All notable changes to the Helix project will be documented in this file. The fo
 
 ---
 
+## [0.3.0](https://github.com/poornachandra24/Helix/compare/v0.2.0...v0.3.0) (2026-06-21)
+
+
+### Features
+
+* dynamic MCP hot-reloading, post-mortem reflection, and BM25 hybrid search ([#9](https://github.com/poornachandra24/Helix/issues/9)) ([d719d87](https://github.com/poornachandra24/Helix/commit/d719d8769333ec4a83dff730373b33512782d992))
+
 ## [0.2.0] - 2026-06-04
 
 ### Added
