@@ -19,37 +19,37 @@ async-trait = "0.1"
 chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
 console = "0.16.3"
-crossterm = "0.28.1"
+crossterm = "0.29.0"
 textwrap = { version = "0.16", default-features = false }
-unicode-width = "0.1"
+unicode-width = "0.2"
 comfy-table = { version = "7.1.1", default-features = false, features = ["custom_styling"] }
 owo-colors = "4.3.0"
 termimad = "0.34"
 dialoguer = "0.12.0"
 directories = "6.0.0"
 futures-util = "0.3"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tempfile = "3.27.0"
-thiserror = "1"
+thiserror = "2"
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "1.1.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 fastembed = "5"
-turbovec = "0.6.0"
-rusqlite = { version = "0.31.0", features = ["bundled"] }
+turbovec = "0.9.0"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 rmcp = { version = "1.7.0", features = ["client", "transport-child-process"] }
 ruvllm = "2.2.1"
 ruvector-sona = { path = "./ruvector-sona", features = ["serde-support"] }
-tiktoken-rs = "0.6.0"
+tiktoken-rs = "0.9.1"
 wasmi = "0.31.2"
 wasmi_wasi = "0.31.2"
-wasi-common = "2.0.2"
+wasi-common = "24.0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-blas-src = { version = "0.10", features = ["openblas"] }
+blas-src = { version = "0.14", features = ["openblas"] }
 openblas-src = { version = "0.10", features = ["static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
