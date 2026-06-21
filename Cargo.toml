@@ -54,3 +54,6 @@ openblas-src = { version = "0.10", features = ["static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.10", features = ["accelerate"] }
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "docs/header.html"]

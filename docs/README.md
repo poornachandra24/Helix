@@ -5,7 +5,7 @@ Welcome to the Helix developer documentation. This directory contains detailed a
 ## Subsystems
 
 1.  **[Local Semantic Memory Architecture](memory_architecture.md)**
-    *   Details the dual-store setup combining SQLite (metadata) and a 4-bit Lloyd-Max quantized SIMD vector index (`turbovec`).
+    *   Details the dual-store setup combining SQLite (metadata) and a 4-bit TurboQuant quantized vector index (`turbovec`).
     *   Includes data flow, initialization, retrieval, and turn-committing flowcharts and sequence diagrams.
     *   Contains memory footprint profiles (baseline ~227 MiB RSS), thread pool resource allocation analysis, and verification commands.
 

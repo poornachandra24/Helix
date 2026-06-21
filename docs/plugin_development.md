@@ -69,7 +69,7 @@ impl Tool for AddTool {
 Instantiate your tool and add it to the `ToolRegistry` within `src/cli/helpers.rs`'s `build_tool_registry` function:
 ```rust
 let mut registry = ToolRegistry::new();
-registry.register(Box::new(AddTool));
+registry.register(AddTool);
 ```
 
 ---
@@ -106,7 +106,7 @@ Add the external server specifications to your `mcp_config.json` (located in the
 
 ## 3. Creating Markdown Skills
 
-Skills are modular, natural-language behavioral guidelines stored in `~/.config/helix/skills/`. They allow you to inject expert behaviors dynamically without writing Rust code.
+Skills are modular, natural-language behavioral guidelines stored in the `skills/` subdirectory within your platform's data folder (e.g., `~/.local/share/helix/skills/` on Linux, `~/Library/Application Support/com.helix.helix/skills/` on macOS, or `%USERPROFILE%\AppData\Roaming\helix\helix\data\skills\` on Windows). They allow you to inject expert behaviors dynamically without writing Rust code.
 
 ### 3.1 Skill Structure
 Create a markdown file with YAML frontmatter at the top:

@@ -84,7 +84,7 @@ All file-system tools (`read_file`, `write_file`, `list_dir`) route paths throug
 
 Helix integrates a dual-store semantic memory model with localized query alignment:
 
-*   **Vector Engine (`turbovec`)**: Combined SQLite database (for metadata) and a 4-bit Lloyd-Max quantized SIMD vector index to store long-term memories.
+*   **Vector Engine (`turbovec`)**: Combined SQLite database (for metadata) and a 4-bit TurboQuant quantized vector index to store long-term memories.
 *   **SONA Self-Optimization**:
     *   Tunes queries on the fly utilizing an embedding projection matrix (Micro-LoRA rank 8 alignment).
     *   Uses **Elastic Weight Consolidation (EWC)** to consolidate task parameters without catastrophic forgetting.
