@@ -1,4 +1,4 @@
-# 📥 Installation & Setup Guide
+# Installation and Setup Guide
 
 This guide details how to install, configure, and run Helix CLI across different environments (macOS, Linux, Windows, and Docker).
 
@@ -14,7 +14,6 @@ This is the recommended approach for macOS and Linux users. It detects your CPU 
 curl -fsSL https://raw.githubusercontent.com/poornachandra24/Helix/main/install.sh | sh
 ```
 
-> [!NOTE]
 > **Compatibility**: The precompiled Linux binary requires **GLIBC 2.35 or newer** (found in Ubuntu 22.04+, Debian 12+, and other recent distributions). If your system runs an older version of glibc, please use the **Docker** installation method below.
 
 ### Windows (PowerShell Script)
@@ -61,21 +60,31 @@ docker run -it --rm `
 Regardless of how you installed the binary, running `helix` for the first time without a config file will start an interactive setup wizard:
 
 ```text
-Welcome to Harness CLI! Let's set up your primary provider.
+   ██╗  ██╗███████╗██╗     ██╗██╗  ██╗
+   ██║  ██║██╔════╝██║     ██║╚██╗██╔╝
+   ███████║█████╗  ██║     ██║ ╚███╔╝ 
+   ██╔══██║██╔══╝  ██║     ██║ ██╔██╗ 
+   ██║  ██║███████╗███████╗██║██╔╝ ██╗
+   ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝
+
+  Helix Setup Wizard
+  ─────────────────────────────────────────
+  Let's configure your primary provider and model.
 
 ? Choose a Provider Template
 ❯ Ollama (Local)
-  Ollama Cloud
+  OpenRouter
   Groq
   OpenAI
   Gemini
+  DeepSeek
   Custom (OpenAI-compatible)
 
 ? Base URL: http://localhost:11434
 ? API Key for Ollama (Local) (Enter to skip):
 ? Model Name: qwen3:4b
 
-✅ Configuration updated and saved!
+Configuration updated and saved!
 ```
 
 You can re-trigger this setup wizard at any time using:

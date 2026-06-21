@@ -466,6 +466,112 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
         .collect()
 }
 
+/// Redacts common secret patterns (API keys, tokens, passwords) in a string
+/// so they are never shown in plain text in the terminal UI.
+/// Uses no external crates — pure stdlib string scanning.
+fn redact_secrets(input: &str) -> String {
+    // Keywords that signal the next token is a secret value.
+    const SECRET_KEYWORDS: &[&str] = &[
+        "key", "token", "secret", "password", "api", "auth", "bearer", "KEY", "TOKEN", "SECRET",
+        "PASSWORD", "API", "AUTH", "BEARER",
+    ];
+
+    let mut out = input.to_string();
+
+    // Pass 1 – env-var / shell style:  SOME_KEY=VALUE  or  KEY="VALUE"
+    // Walk through the string looking for `=` preceded by a secret keyword.
+    let mut result = String::with_capacity(out.len());
+    let mut i = 0;
+    let chars: Vec<char> = out.chars().collect();
+    while i < chars.len() {
+        // Look for '='
+        if chars[i] == '=' {
+            // Check if the word before '=' contains a secret keyword
+            let word_start = chars[..i]
+                .iter()
+                .rposition(|&c| {
+                    c == ' ' || c == '"' || c == '\'' || c == ';' || c == '&' || c == '\n'
+                })
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let word: String = chars[word_start..i].iter().collect();
+            let word_lower = word.to_lowercase();
+            let is_secret = SECRET_KEYWORDS
+                .iter()
+                .any(|k| word_lower.contains(&k.to_lowercase()));
+
+            if is_secret {
+                result.push('=');
+                i += 1;
+                // Skip optional quote
+                let quote = if i < chars.len() && (chars[i] == '"' || chars[i] == '\'') {
+                    let q = chars[i];
+                    result.push(q);
+                    i += 1;
+                    Some(q)
+                } else {
+                    None
+                };
+                // The value runs until whitespace, matching quote, or end-of-string
+                let val_start = i;
+                while i < chars.len() {
+                    let c = chars[i];
+                    if let Some(q) = quote {
+                        if c == q {
+                            break;
+                        }
+                    } else if c == ' ' || c == '\'' || c == '"' || c == ';' || c == '&' || c == '\n'
+                    {
+                        break;
+                    }
+                    i += 1;
+                }
+                let val_len = i - val_start;
+                if val_len >= 6 {
+                    result.push_str("***REDACTED***");
+                } else {
+                    result.extend(chars[val_start..i].iter());
+                }
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    out = result;
+
+    // Pass 2 – HTTP header style:  xi-api-key: VALUE  /  Bearer VALUE
+    let header_triggers = ["xi-api-key:", "Authorization:", "bearer ", "Bearer "];
+    for trigger in &header_triggers {
+        let trigger_lower = trigger.to_lowercase();
+        let mut new_out = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(pos) = rest.to_lowercase().find(trigger_lower.as_str()) {
+            new_out.push_str(&rest[..pos + trigger.len()]);
+            rest = &rest[pos + trigger.len()..];
+            // skip optional space
+            let rest_trimmed = rest.trim_start_matches(' ');
+            let skipped = rest.len() - rest_trimmed.len();
+            for _ in 0..skipped {
+                new_out.push(' ');
+            }
+            rest = rest_trimmed;
+            // consume the value token (until whitespace or quote or end)
+            let end = rest.find([' ', '"', '\'', '\n']).unwrap_or(rest.len());
+            if end >= 6 {
+                new_out.push_str("***REDACTED***");
+            } else {
+                new_out.push_str(&rest[..end]);
+            }
+            rest = &rest[end..];
+        }
+        new_out.push_str(rest);
+        out = new_out;
+    }
+
+    out
+}
+
 pub fn confirm_agent_action(
     tool_name: &str,
     description: &str,
@@ -477,14 +583,24 @@ pub fn confirm_agent_action(
     use console::style;
     use dialoguer::Confirm;
 
+    // Fit table to terminal: label col is fixed 18, value col fills rest.
+    // Outer borders + padding cost ~6 chars, so subtract that from usable width.
+    let term_cols = console::Term::stdout()
+        .size_checked()
+        .map(|(_, c)| c as usize)
+        .unwrap_or(80);
+    let table_width = term_cols.min(100); // cap at 100 for readability
+    let label_col: u16 = 18;
+    let value_col = (table_width.saturating_sub(label_col as usize + 6)) as u16;
+
     println!();
     let mut table = Table::new();
     table.load_preset(UTF8_BORDERS_ONLY);
     table.apply_modifier(UTF8_ROUND_CORNERS);
-    table.set_width(70);
+    table.set_width(table_width as u16);
     table.set_constraints(vec![
-        ColumnConstraint::Absolute(Width::Fixed(18)),
-        ColumnConstraint::Absolute(Width::Fixed(48)),
+        ColumnConstraint::Absolute(Width::Fixed(label_col)),
+        ColumnConstraint::Absolute(Width::Fixed(value_col)),
     ]);
 
     // Header row
@@ -499,9 +615,11 @@ pub fn confirm_agent_action(
             .set_alignment(comfy_table::CellAlignment::Right),
     ]);
 
+    let div_label: String = "─".repeat(label_col as usize);
+    let div_value: String = "─".repeat(value_col as usize);
     table.add_row(vec![
-        Cell::new("──────────────────").fg(Color::DarkGrey),
-        Cell::new("────────────────────────────────────────────────").fg(Color::DarkGrey),
+        Cell::new(&div_label).fg(Color::DarkGrey),
+        Cell::new(&div_value).fg(Color::DarkGrey),
     ]);
 
     table.add_row(vec![
@@ -512,11 +630,12 @@ pub fn confirm_agent_action(
     ]);
 
     if let Some(det) = details {
+        let redacted = redact_secrets(det);
         table.add_row(vec![
             Cell::new("Target/Payload")
                 .fg(Color::DarkGrey)
                 .add_attribute(Attribute::Bold),
-            Cell::new(det).fg(Color::Cyan),
+            Cell::new(&redacted).fg(Color::Cyan),
         ]);
     }
 

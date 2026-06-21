@@ -30,7 +30,8 @@ pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()
         CRITICAL FORMATTING RULES FOR TERMINAL ENVIRONMENT:\n\
         1. DO NOT USE MARKDOWN TABLES (e.g. '| Header | Header |') because they get severely mangled and wrapped when displayed inside the terminal's narrow fixed-width box layout (typically 80-110 characters). Instead, represent tabular data using nested bullet points, bold key-value listings, or record blocks (e.g. '◆ Record 1:\n  * Key: Value').\n\
         2. Keep horizontal lines and separators short. DO NOT output long horizontal line dashes like '------------------------------' or ASCII art. Keep horizontal dividers short, e.g., '---'.\n\
-        3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.";
+        3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.\n\
+        4. DO NOT try to scrape search engines, media sites, or streaming/video sites (like YouTube, Google, etc.) using the 'web_fetch' tool. These sites block simple automated requests with CAPTCHAs or 403 Forbidden errors. Instead, suggest search options or search queries to the user, or rely on existing knowledge.";
     let system_prompt = build_system_prompt(base_system, &skill_reg);
     let lookup_client = crate::model::registry::build_lookup_client();
     let context = build_context(

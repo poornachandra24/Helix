@@ -56,6 +56,44 @@ impl HelixMemoryEngine {
             [],
         )?;
 
+        // Create FTS5 virtual table and triggers for BM25 sparse matching
+        db.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+                text,
+                content='memory_metadata',
+                content_rowid='id'
+            )",
+            [],
+        )?;
+
+        db.execute(
+            "CREATE TRIGGER IF NOT EXISTS tbl_fts_ai AFTER INSERT ON memory_metadata BEGIN
+                INSERT INTO memory_fts(rowid, text) VALUES (new.id, new.text);
+            END;",
+            [],
+        )?;
+
+        db.execute(
+            "CREATE TRIGGER IF NOT EXISTS tbl_fts_ad AFTER DELETE ON memory_metadata BEGIN
+                INSERT INTO memory_fts(memory_fts, rowid, text) VALUES('delete', old.id, old.text);
+            END;",
+            [],
+        )?;
+
+        // Backfill FTS5 from existing memory_metadata records if it's empty
+        let fts_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM memory_fts", [], |r| r.get(0))
+            .unwrap_or(0);
+        let meta_count: i64 = db
+            .query_row("SELECT COUNT(*) FROM memory_metadata", [], |r| r.get(0))
+            .unwrap_or(0);
+        if fts_count == 0 && meta_count > 0 {
+            db.execute(
+                "INSERT INTO memory_fts(rowid, text) SELECT id, text FROM memory_metadata",
+                [],
+            )?;
+        }
+
         // Under test cfg, use mock to avoid downloading BGESmallENV15 model
         #[cfg(not(test))]
         let embedder = Embedder::Real(Box::new(TextEmbedding::try_new(
@@ -126,7 +164,14 @@ impl HelixMemoryEngine {
         Ok(())
     }
 
-    /// Retrieve memories similar to the query, restricted to the active workspace.
+    /// Retrieves memories matching the query, restricted to the active workspace.
+    ///
+    /// Executes a hybrid search combining:
+    /// 1. **Dense Semantic Search**: Generates vector embeddings via `fastembed` and queries `turbovec` (optionally adjusted via Sona Micro-LoRA).
+    /// 2. **Sparse Keyword Search**: Queries a SQLite FTS5 virtual table using the native `bm25` scoring algorithm.
+    ///
+    /// The dense and sparse ranks are fused using the **Reciprocal Rank Fusion (RRF)** formula
+    /// to return the final list of high-signal memories.
     pub fn search(
         &mut self,
         query: &str,
@@ -134,61 +179,133 @@ impl HelixMemoryEngine {
         workspace_path: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<MemoryMatch>> {
-        if self.index.is_empty() {
-            return Ok(Vec::new());
-        }
+        use std::collections::HashMap;
 
-        let mut query_vector = self.embed_text(query)?;
+        // 1. Run Sparse FTS5 BM25 matching
+        let mut sparse_matches = Vec::new();
+        let parsed_query = query
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect::<String>();
+        let fts_query = parsed_query
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" OR ");
 
-        if let Some(sona_engine) = sona {
-            let mut shift = vec![0.0f32; 384];
-            sona_engine.apply_micro_lora(&query_vector, &mut shift);
-            for (q, s) in query_vector.iter_mut().zip(shift) {
-                *q += s;
+        if !fts_query.is_empty() {
+            let prep_res = self.db.prepare(
+                "SELECT id, text, file_path, bm25(memory_fts) as score \
+                 FROM memory_fts \
+                 JOIN memory_metadata ON memory_metadata.id = memory_fts.rowid \
+                 WHERE (memory_metadata.workspace_path = ? OR memory_metadata.workspace_path = 'global') AND memory_fts MATCH ? \
+                 ORDER BY score ASC LIMIT ?",
+            );
+            if let Ok(mut stmt) = prep_res {
+                let query_res = stmt.query(rusqlite::params![workspace_path, fts_query, limit]);
+                if let Ok(mut rows) = query_res {
+                    while let Ok(Some(row)) = rows.next() {
+                        if let (Ok(id), Ok(text), Ok(file_path), Ok(score)) = (
+                            row.get::<_, u64>(0),
+                            row.get::<_, String>(1),
+                            row.get::<_, Option<String>>(2),
+                            row.get::<_, f32>(3),
+                        ) {
+                            sparse_matches.push((id, text, file_path, score));
+                        }
+                    }
+                }
             }
         }
 
-        // Retrieve candidate row IDs for the active workspace
-        let mut stmt = self
-            .db
-            .prepare("SELECT id FROM memory_metadata WHERE workspace_path = ?")?;
-        let sqlite_ids: Vec<u64> = stmt
-            .query_map([workspace_path], |row| row.get(0))?
-            .filter_map(Result::ok)
-            .collect();
+        // 2. Run Dense Vector matching
+        let mut dense_matches = Vec::new();
+        if !self.index.is_empty() {
+            let query_vec_res = self.embed_text(query);
+            if let Ok(query_vector) = query_vec_res {
+                let mut adjusted_vector = query_vector;
+                if let Some(sona_engine) = sona {
+                    let mut shift = vec![0.0f32; 384];
+                    sona_engine.apply_micro_lora(&adjusted_vector, &mut shift);
+                    for (q, s) in adjusted_vector.iter_mut().zip(shift) {
+                        *q += s;
+                    }
+                }
 
-        // Filter allowed IDs so we don't pass non-existent keys to turbovec (which would panic)
-        let allowed_ids: Vec<u64> = sqlite_ids
+                // Retrieve candidate row IDs for the active workspace and global memories
+                let prep_res = self.db.prepare("SELECT id FROM memory_metadata WHERE workspace_path = ? OR workspace_path = 'global'");
+                if let Ok(mut stmt) = prep_res {
+                    let query_res = stmt.query_map([workspace_path], |row| row.get::<_, u64>(0));
+                    if let Ok(sqlite_ids) = query_res {
+                        let allowed_ids: Vec<u64> = sqlite_ids
+                            .filter_map(Result::ok)
+                            .filter(|&id| self.index.contains(id))
+                            .collect();
+
+                        if !allowed_ids.is_empty() {
+                            let (scores, ids) = self.index.search_with_allowlist(
+                                &adjusted_vector,
+                                limit,
+                                Some(&allowed_ids),
+                            );
+                            for (score, id) in scores.into_iter().zip(ids) {
+                                if let Ok((text, file_path)) = self.db.query_row(
+                                    "SELECT text, file_path FROM memory_metadata WHERE id = ?",
+                                    [id],
+                                    |row| {
+                                        let t: String = row.get(0).unwrap_or_default();
+                                        let f: Option<String> = row.get(1).unwrap_or(None);
+                                        Ok((t, f))
+                                    },
+                                ) {
+                                    dense_matches.push((id, text, file_path, score));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Reciprocal Rank Fusion (RRF)
+        let k = 60.0f32;
+        let mut rrf_scores: HashMap<u64, (String, Option<String>, f32)> = HashMap::new();
+
+        // Accumulate RRF points from Dense Rank
+        for (rank, (id, text, file_path, _score)) in dense_matches.iter().enumerate() {
+            let rank_score = 1.0 / (k + (rank + 1) as f32);
+            rrf_scores
+                .entry(*id)
+                .or_insert_with(|| (text.clone(), file_path.clone(), 0.0))
+                .2 += rank_score;
+        }
+
+        // Accumulate RRF points from Sparse Rank
+        for (rank, (id, text, file_path, _score)) in sparse_matches.iter().enumerate() {
+            let rank_score = 1.0 / (k + (rank + 1) as f32);
+            rrf_scores
+                .entry(*id)
+                .or_insert_with(|| (text.clone(), file_path.clone(), 0.0))
+                .2 += rank_score;
+        }
+
+        // Sort by RRF score descending and limit results
+        let mut combined_matches: Vec<MemoryMatch> = rrf_scores
             .into_iter()
-            .filter(|&id| self.index.contains(id))
+            .map(|(_, (text, file_path, rrf_score))| MemoryMatch {
+                text,
+                file_path,
+                score: rrf_score,
+            })
             .collect();
 
-        if allowed_ids.is_empty() {
-            return Ok(Vec::new());
-        }
+        combined_matches.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        combined_matches.truncate(limit);
 
-        let (scores, ids) =
-            self.index
-                .search_with_allowlist(&query_vector, limit, Some(&allowed_ids));
-
-        let mut matches = Vec::new();
-        for (score, id) in scores.into_iter().zip(ids) {
-            let mut stmt = self
-                .db
-                .prepare("SELECT text, file_path FROM memory_metadata WHERE id = ?")?;
-            let mut rows = stmt.query([id])?;
-            if let Some(row) = rows.next()? {
-                let text: String = row.get(0)?;
-                let file_path: Option<String> = row.get(1)?;
-                matches.push(MemoryMatch {
-                    text,
-                    file_path,
-                    score,
-                });
-            }
-        }
-
-        Ok(matches)
+        Ok(combined_matches)
     }
 
     /// Write the current turbovec index state to disk.

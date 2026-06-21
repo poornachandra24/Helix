@@ -6,9 +6,11 @@ Helix implements an offline, high-performance semantic memory store to persist a
 
 ## 1. Subsystem Components
 
-*   **SQLite Metadata Store**: A local SQL database (`memory_meta.db`) that stores text snippets, associated files, workspace directories, and creation timestamps.
+*   **SQLite Metadata Store & FTS5 BM25 Search**: A local SQL database (`memory_meta.db`) that stores text snippets, associated files, and workspace directories. Uses SQLite's FTS5 extension to perform full-text BM25 search alongside vector queries.
 *   **turbovec Quantized Index**: A high-performance vector index (`memory_index.tvim`) utilizing **4-bit Lloyd-Max Scalar Quantization** for 8x memory compression. Vectors are matched using SIMD-accelerated cosine similarity.
 *   **fastembed-rs ONNX Embeddings**: Automatically loads and caches the `BAAI/bge-small-en-v1.5` text embedding model (384 dimensions) completely offline using ONNX Runtime.
+*   **BM25 Hybrid Retrieval**: Combines semantic embeddings with lexical FTS5 queries using Reciprocal Rank Fusion (RRF) to retrieve highly relevant context matches.
+*   **Post-Mortem Reflective Memory**: Automatically summarizes and index-serializes the user-agent interaction session upon exit, feeding into long-term recall cache.
 *   **Workspace Filtering & Allowlist**: To isolate workspaces, queries are filtered by mapping workspace row IDs from SQLite directly into `turbovec`'s search allowlist. This prevents memory leakage between projects.
 
 ---
@@ -145,3 +147,32 @@ sleep 1.5
 # Check RSS, virtual size, and thread counts
 cat /proc/$PID/status | grep -E "VmRSS|VmSize|VmPeak|Threads"
 ```
+
+---
+
+## 5. Lexical & Semantic Hybrid Search (BM25 + Vector)
+
+To match exact technical vocabulary (such as function names, API keys, error codes, and config tags) that dense vector embeddings might dilute, Helix implements a hybrid retrieval model:
+
+1.  **Lexical Query (BM25)**: An FTS5-backed virtual table index in SQLite performs full-text search. Term occurrences are scored using the Okapi BM25 algorithm.
+2.  **Semantic Query (Cosine)**: Dense 384-dimensional vectors are evaluated in the `turbovec` index using SIMD-optimized cosine similarity.
+3.  **Reciprocal Rank Fusion (RRF)**: Merges the ranked outputs of both search stages, ensuring items matching either exact keyword tokens or broad conceptual intent rise to the top.
+
+---
+
+## 6. Post-Mortem Reflective Memory
+
+Upon termination of a REPL session (via `/exit` or normal interrupt), the harness triggers an autonomous compilation pipeline:
+
+```mermaid
+graph LR
+    History[Session History Buffer] --> Summarize[LLM Summarization Module]
+    Summarize --> SummaryMarkdown[Markdown Session Summary]
+    SummaryMarkdown --> Vectorize[fastembed BGE-small Embedder]
+    SummaryMarkdown --> StoreSQL[SQLite Metadata Indexer]
+    Vectorize & StoreSQL --> Index[Local Memory Index]
+```
+
+- **Summarization**: The engine passes the active session history to the LLM cloud/local engine, asking it to write a structured summary highlighting the goals achieved, technical decisions made, and outstanding issues.
+- **Indexing**: The generated summary is written to `<data_dir>/memory/sessions/` and automatically embedded and indexed in SQLite and `turbovec`. Future sessions starting in the same workspace automatically inherit these key learnings.
+

@@ -82,3 +82,16 @@ Helix looks for an `mcp_config.json` configuration file in the following order o
 *   `args`: Array of command-line arguments.
 *   `env`: Optional map of environment variables to pass to the process.
 *   `requiresConfirmation`: Optional boolean. If set to `true`, Helix will prompt the operator for confirmation before dispatching any tool from this server.
+
+---
+
+## Dynamic Configuration Hot-Reloading
+
+To prevent developers from having to restart active sessions when adding new capabilities, Helix supports zero-downtime hot-reloading for MCP configurations:
+
+1.  **File Integrity Monitor**: The core engine starts an asynchronous file watcher monitoring `mcp_config.json` (and user-defined skill directories).
+2.  **State Synchronizer**: When write updates are detected, Helix parses the new JSON config structure:
+    - **Added Servers**: Instantly initializes and handshakes with the new child processes.
+    - **Modified/Removed Servers**: Sends a termination signal (`SIGTERM` / `kill`) to obsolete processes, cleans up internal registry references, and boots replacement instances.
+    - **Registry Re-indexing**: Refreshes tool routing structures in real-time, making new tools immediately visible to the LLM system prompt on the next prompt turn.
+

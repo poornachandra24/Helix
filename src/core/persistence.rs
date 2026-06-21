@@ -30,6 +30,7 @@ impl Session {
     /// Append an event to the session log, stamping it with the current time.
     pub fn append(&self, mut event: Value) -> Result<()> {
         event["ts"] = serde_json::json!(Local::now().to_rfc3339());
+        redact_value(&mut event);
         let line = serde_json::to_string(&event)?;
         let mut file = OpenOptions::new()
             .create(true)
@@ -120,4 +121,106 @@ pub fn list_sessions() -> Result<Vec<SessionMeta>> {
 
     sessions.sort_by_key(|b| std::cmp::Reverse(b.modified_at));
     Ok(sessions)
+}
+
+fn redact_value(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            *s = redact_secrets(s);
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                redact_value(v);
+            }
+        }
+        Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                let lower_k = k.to_lowercase();
+                let is_secret = lower_k.contains("api_key")
+                    || lower_k.contains("secret")
+                    || lower_k.contains("password");
+                if is_secret {
+                    let _ = ();
+                    if let Value::String(s) = v {
+                        let is_empty = s.is_empty();
+                        if !is_empty {
+                            *s = "[REDACTED_CREDENTIALS]".to_string();
+                            continue;
+                        }
+                    }
+                }
+                redact_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn redact_secrets(text: &str) -> String {
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let mut words = Vec::new();
+        for word in line.split_whitespace() {
+            let clean_word = word.trim_matches(|c| {
+                c == '"' || c == '\'' || c == ',' || c == ';' || c == '{' || c == '}'
+            });
+            if is_sensitive_key(clean_word) {
+                words.push(word.replace(clean_word, "[REDACTED_API_KEY]"));
+            } else {
+                words.push(word.to_string());
+            }
+        }
+        lines.push(words.join(" "));
+    }
+    lines.join("\n")
+}
+
+fn is_sensitive_key(word: &str) -> bool {
+    if word.len() >= 20 {
+        if word.starts_with("sk-proj-") || word.starts_with("sk-ant-") || word.starts_with("AIzaSy")
+        {
+            return true;
+        }
+        if word.starts_with("sk-")
+            && word
+                .chars()
+                .skip(3)
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_redact_secrets() {
+        let input = "Here is my key: sk-proj-123456789012345678901234567890 and anthropic key: \"sk-ant-123456789012345678901234567890\"";
+        let expected =
+            "Here is my key: [REDACTED_API_KEY] and anthropic key: \"[REDACTED_API_KEY]\"";
+        assert_eq!(redact_secrets(input), expected);
+    }
+
+    #[test]
+    fn test_redact_value_credentials() {
+        let mut val = json!({
+            "user_input": "connect",
+            "api_key": "some_plain_text_api_key",
+            "password": "mysecretpassword",
+            "nested": {
+                "secret_token": "some_value"
+            }
+        });
+
+        redact_value(&mut val);
+
+        assert_eq!(val["api_key"], "[REDACTED_CREDENTIALS]");
+        assert_eq!(val["password"], "[REDACTED_CREDENTIALS]");
+        assert_eq!(val["nested"]["secret_token"], "[REDACTED_CREDENTIALS]");
+    }
 }

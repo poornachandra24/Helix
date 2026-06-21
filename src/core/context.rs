@@ -1,6 +1,13 @@
 use crate::tools::ToolDescriptor;
 use serde_json::{Value, json};
-use tiktoken_rs::cl100k_base;
+use std::sync::OnceLock;
+use tiktoken_rs::{CoreBPE, cl100k_base};
+
+static BPE: OnceLock<Option<CoreBPE>> = OnceLock::new();
+
+fn get_bpe() -> Option<&'static CoreBPE> {
+    BPE.get_or_init(|| cl100k_base().ok()).as_ref()
+}
 
 // ──────────────────────────────────────────────
 // Token Estimation
@@ -18,7 +25,7 @@ impl TokenEstimator {
         if text.is_empty() {
             return 0;
         }
-        if let Ok(bpe) = cl100k_base() {
+        if let Some(bpe) = get_bpe() {
             bpe.encode_with_special_tokens(text).len()
         } else {
             // Heuristic fallback: count structural chars to detect code/JSON density
