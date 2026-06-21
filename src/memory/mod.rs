@@ -1,3 +1,9 @@
+//! # Semantic & Hybrid Retrieval Memory Subsystem
+//!
+//! This module provides dual-store search capabilities, combining local vector searches
+//! (using 4-bit Lloyd-Max quantized indexes) with SQLite metadata storage.
+//! It handles repository indexing, file-matching retrieval, and SONA-based query alignment.
+
 pub mod skills;
 
 use fastembed::TextEmbedding;

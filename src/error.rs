@@ -1,3 +1,8 @@
+//! # Error Definitions & Recovery Types
+//!
+//! This module defines the canonical [`HelixError`] enum, representing the failure modes
+//! of the Helix system, including API, tool execution, configuration, and I/O errors.
+
 use thiserror::Error;
 
 /// Canonical error type for the helix-cli codebase.

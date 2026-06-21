@@ -22,10 +22,20 @@
 //! *   **EWC++ (Elastic Weight Consolidation)**: Protects critical weights from catastrophic forgetting as the agent learns from new codebase interactions.
 //! *   **ReasoningBank**: Classifies query trajectories (using K-means++ clustering) to map incoming user prompts to historical centroids that previously yielded high-quality tool execution.
 //!
-//! ### Credits and Official Resources:
-//! *   **Developers**: Developed by the RuVector Team (<team@ruvnet.dev>).
-//! *   **Repository**: Coded as part of the [RuVector Ecosystem](https://github.com/ruvnet/ruvector).
-//! *   **Crate**: Distributed via [ruvector-sona](https://crates.io/crates/ruvector-sona).
+//! ### Official Resources:
+//! *   **Repository**: [Helix GitHub Repository](https://github.com/poornachandra24/Helix)
+//! *   **Documentation**: [Helix API Documentation](https://poornachandra24.github.io/Helix/helix/index.html)
+//!
+//! ## Open Source Credits & Dependencies
+//!
+//! Helix is built on top of many incredible open-source libraries and crates from the Rust ecosystem:
+//!
+//! *   **Semantic Indexing**: `fastembed` for local ONNX text embeddings, and `turbovec` for fast, memory-mapped vector search.
+//! *   **Self-Optimizing Neural Architecture (SONA)**: `ruvector-sona` for runtime-adaptive context query alignment.
+//! *   **Model Context Protocol (MCP)**: `rmcp` client capabilities for spawning context and tool servers.
+//! *   **WASM Sandboxing**: `wasmi` and `wasmi_wasi` for running secure, isolated WebAssembly client code.
+//! *   **Terminal UI Orchestration**: `crossterm` for cross-platform raw console support, `termimad` for Markdown rendering, `dialoguer` for interactive setups, and `comfy-table` for output alignment.
+//! *   **Async Runtime**: `tokio` and `reqwest` powering asynchronous network operations and API dispatch.
 //!
 //! ## Model Context Protocol (MCP) Support
 //!
@@ -33,7 +43,6 @@
 //! can be dynamically spawned and registered at boot time by specifying server configurations in an
 //! `mcp_config.json` file. MCP tools are wrapped and registered in the unified tools module, enabling
 //! seamless interaction between the language model and third-party context servers.
-
 //!
 //! ## Technical Roadmap
 //!

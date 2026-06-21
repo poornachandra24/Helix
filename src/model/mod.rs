@@ -1,3 +1,9 @@
+//! # Model Adapters & Provider Integration Layer
+//!
+//! This module provides abstractions and adapters to interact with OpenAI-compatible API providers,
+//! Ollama native endpoints, and other LLMs. It defines the [`ModelAdapter`] trait and handles request
+//! payload generation, response parsing (including streaming and Markdown fallback), and reasoning parameters.
+
 pub mod registry;
 
 use anyhow::Result;

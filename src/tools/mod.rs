@@ -1,4 +1,17 @@
+//! # Extensible Tooling & Sandboxing Subsystem
+//!
+//! This module provides the central [`Tool`] trait, the [`ToolRegistry`] for registering
+//! and dispatching tools, and integration frameworks for sandboxed runtimes (Docker/WASM)
+//! and Model Context Protocol (MCP) servers.
+//!
+//! ## Modules
+//!
+//! - [`builtins`]: Default system tools (file I/O, search, commands).
+//! - [`mcp`]: Client subsystem for spawning and interacting with external MCP stdio servers.
+//! - [`sandbox`]: Runtime environments to execute commands safely in isolated containers or WASM runtimes.
+
 pub mod builtins;
+
 pub mod mcp;
 pub mod sandbox;
 

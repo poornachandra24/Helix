@@ -1,4 +1,10 @@
+//! # System Configuration Loader & Setup Wizard
+//!
+//! This module handles provider API templates (Ollama, OpenAI, Gemini, etc.),
+//! global execution settings (sandbox modes, token headroom), and the CLI configuration wizard.
+
 use anyhow::{Context, Result};
+
 use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
 use directories::ProjectDirs;
 use reqwest::Client;
