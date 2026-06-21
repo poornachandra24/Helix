@@ -1,7 +1,7 @@
 use crate::tools::ToolDescriptor;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
-use tiktoken_rs::{cl100k_base, CoreBPE};
+use tiktoken_rs::{CoreBPE, cl100k_base};
 
 static BPE: OnceLock<Option<CoreBPE>> = OnceLock::new();
 
