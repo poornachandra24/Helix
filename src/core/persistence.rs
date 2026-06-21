@@ -140,6 +140,7 @@ fn redact_value(value: &mut Value) {
                     || lower_k.contains("secret")
                     || lower_k.contains("password");
                 if is_secret {
+                    let _ = ();
                     if let Value::String(s) = v {
                         let is_empty = s.is_empty();
                         if !is_empty {

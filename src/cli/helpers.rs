@@ -557,7 +557,7 @@ fn redact_secrets(input: &str) -> String {
             }
             rest = rest_trimmed;
             // consume the value token (until whitespace or quote or end)
-            let end = rest.find(&[' ', '"', '\'', '\n']).unwrap_or(rest.len());
+            let end = rest.find([' ', '"', '\'', '\n']).unwrap_or(rest.len());
             if end >= 6 {
                 new_out.push_str("***REDACTED***");
             } else {
