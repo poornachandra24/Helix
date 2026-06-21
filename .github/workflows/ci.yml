@@ -28,7 +28,7 @@ jobs:
       docs_only: ${{ steps.check.outputs.docs_only }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Stable Rust
         uses: dtolnay/rust-toolchain@stable
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Run Cargo Audit
         uses: actions-rust-lang/audit@v1
@@ -102,7 +102,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Disable Windows Defender
         if: matrix.os == 'windows-latest'
@@ -142,7 +142,7 @@ jobs:
       HF_HOME: ${{ github.workspace }}/.hf_cache
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Disable Windows Defender
         if: matrix.os == 'windows-latest'

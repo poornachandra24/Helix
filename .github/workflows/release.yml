@@ -34,7 +34,7 @@ jobs:
       HF_HOME: ${{ github.workspace }}/.hf_cache
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Stable Rust
         uses: dtolnay/rust-toolchain@stable
@@ -116,7 +116,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
@@ -175,7 +175,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
