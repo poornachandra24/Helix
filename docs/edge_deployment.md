@@ -21,9 +21,9 @@ The compiled executable is created at `target/release/helix`.
 
 ### Session & Configuration Files
 Helix configures itself in your home directory under the following locations:
-*   **Config File**: `~/.config/helix/config.toml` (contains API keys, active provider, model selections, and thinking levels).
-*   **Vector Database**: `~/.config/helix/memory/` (SQLite DB and embedding indices).
-*   **Active Skills**: `~/.config/helix/skills/` (Markdown extension skills).
+*   **Config File**: `~/.config/helix/config.toml` on Linux (contains API keys, active provider, model selections, and thinking levels; maps to `~/Library/Preferences/com.helix.helix/config.toml` on macOS).
+*   **Vector Database**: `~/.local/share/helix/` on Linux (contains SQLite `memory_meta.db` and `memory_index.tvim`; maps to `~/Library/Application Support/com.helix.helix/` on macOS).
+*   **Active Skills**: `~/.local/share/helix/skills/` on Linux (Markdown extension skills; maps to `~/Library/Application Support/com.helix.helix/skills/` on macOS).
 
 ---
 

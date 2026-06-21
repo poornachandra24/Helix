@@ -70,7 +70,7 @@ cargo install helix
 ### Initial Configuration
 On first execution (or by running `helix config`), Helix launches an interactive command-line setup wizard to configure your preferred LLM provider, API base URL, API keys, and model selections.
 
-If you prefer to configure it manually, you can edit the generated file at `~/.config/helix/config.toml` (or `%USERPROFILE%\.config\helix\config.toml` on Windows):
+If you prefer to configure it manually, you can edit the generated file at `~/.config/helix/config.toml` (or `%APPDATA%\helix\helix\config\config.toml` on Windows, or `~/Library/Preferences/com.helix.helix/config.toml` on macOS):
 
 ```toml
 active_provider = "anthropic"

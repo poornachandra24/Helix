@@ -1,0 +1,243 @@
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+
+<style>
+    /* Google Fonts Import */
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+    /* Premium Theme Variables overrides */
+    :root {
+        --main-background-color: #0b0f19 !important;
+        --sidebar-background-color: #111827 !important;
+        --content-max-width: 1060px !important;
+    }
+
+    body {
+        font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+        background-color: #0b0f19 !important;
+        color: #94a3b8 !important;
+    }
+
+    /* Sidebar Glassmorphism */
+    .sidebar {
+        background-color: rgba(17, 24, 39, 0.8) !important;
+        backdrop-filter: blur(12px) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+    }
+    
+    .sidebar h2 a, .sidebar-crate h2 a {
+        color: #f1f5f9 !important;
+        font-weight: 700 !important;
+    }
+
+    /* Links & Accents */
+    a, .sidebar-elems a, .sidebar-elems a:visited, main a, main a:visited {
+        color: #60a5fa !important;
+        transition: color 0.2s ease, text-shadow 0.2s ease;
+    }
+    
+    a:hover, .sidebar-elems a:hover, main a:hover {
+        color: #3b82f6 !important;
+        text-shadow: 0 0 8px rgba(59, 130, 246, 0.3) !important;
+        text-decoration: none !important;
+    }
+
+    /* Headings */
+    h1, h2, h3, h4, h5, h6, .sub-heading a {
+        font-family: 'Outfit', sans-serif !important;
+        color: #f1f5f9 !important;
+        font-weight: 600 !important;
+    }
+
+    h1 {
+        font-weight: 700 !important;
+        background: linear-gradient(135deg, #f1f5f9 30%, #3b82f6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    /* Code Blocks styling */
+    pre, code, .example-wrap pre {
+        font-family: 'JetBrains Mono', monospace !important;
+        background-color: #111827 !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+        border-radius: 8px !important;
+        padding: 12px 16px !important;
+        color: #e2e8f0 !important;
+    }
+
+    .docblock code {
+        padding: 2px 6px !important;
+        background-color: rgba(30, 41, 59, 0.8) !important;
+        border-radius: 4px !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    }
+
+    /* Modernized Search Input */
+    .search-input {
+        background-color: #111827 !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        color: #f1f5f9 !important;
+        border-radius: 12px !important;
+        padding: 14px 20px !important;
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 1.1rem !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
+        transition: all 0.3s ease !important;
+    }
+
+    .search-input:focus {
+        border-color: #3b82f6 !important;
+        box-shadow: 0 0 15px rgba(59, 130, 246, 0.25) !important;
+        outline: none !important;
+    }
+
+    /* KaTeX Displays */
+    .math-display {
+        background-color: rgba(17, 24, 39, 0.4) !important;
+        border: 1px solid rgba(255, 255, 255, 0.03) !important;
+        border-radius: 12px !important;
+        padding: 20px !important;
+        box-shadow: inset 0 2px 8px rgba(0,0,0,0.2) !important;
+        overflow-x: auto !important;
+    }
+
+    /* Mermaid Wrapper */
+    .mermaid {
+        background-color: rgba(17, 24, 39, 0.4) !important;
+        border: 1px solid rgba(255, 255, 255, 0.03) !important;
+        border-radius: 12px !important;
+        padding: 20px !important;
+        display: flex;
+        justify-content: center;
+        margin: 20px 0;
+    }
+
+    /* Search Results styling */
+    .search-results {
+        background-color: #0b0f19 !important;
+    }
+
+    .search-results a {
+        background-color: rgba(17, 24, 39, 0.5) !important;
+        border-radius: 8px !important;
+        margin-bottom: 8px !important;
+        padding: 10px 15px !important;
+        border: 1px solid rgba(255, 255, 255, 0.02) !important;
+        display: block !important;
+    }
+
+    .search-results a:hover {
+        background-color: rgba(59, 130, 246, 0.1) !important;
+        border-color: rgba(59, 130, 246, 0.2) !important;
+    }
+
+    /* Target heading highlight styling */
+    :target {
+        background-color: rgba(59, 130, 246, 0.12) !important;
+        border-left: 4px solid #3b82f6 !important;
+        padding-left: 10px !important;
+    }
+
+    /* Sidebar link wrapping */
+    #rustdoc-toc a, .sidebar-elems a, .sidebar-elems .block li a {
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        word-break: break-word !important;
+        line-height: 1.35 !important;
+        display: block !important;
+    }
+</style>
+
+<script>
+    // Initialize KaTeX auto-renderer
+    window.tryRenderMath = function() {
+        if (typeof renderMathInElement !== "undefined") {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '$', right: '$', display: false}
+                ]
+            });
+        }
+    };
+
+    document.addEventListener("DOMContentLoaded", function() {
+        // Initialize Mermaid safely
+        if (typeof mermaid !== "undefined") {
+            mermaid.initialize({
+                startOnLoad: false,
+                theme: 'dark',
+                themeVariables: {
+                    background: '#111827',
+                    primaryColor: '#1e293b',
+                    primaryTextColor: '#f1f5f9',
+                    lineColor: '#60a5fa',
+                    textColor: '#94a3b8'
+                }
+            });
+        }
+
+        // Run KaTeX auto-render first
+        if (window.tryRenderMath) window.tryRenderMath();
+
+        // 1. Render block math from ```math code blocks
+        if (typeof katex !== "undefined") {
+            const mathBlocks = document.querySelectorAll(".language-math");
+            mathBlocks.forEach(block => {
+                const pre = block.closest("pre");
+                if (pre) {
+                    const container = document.createElement("div");
+                    container.className = "math-display";
+                    const code = block.textContent.trim();
+                    try {
+                        katex.render(code, container, { displayMode: true, throwOnError: true });
+                        pre.parentNode.replaceChild(container, pre);
+                    } catch (err) {
+                        console.error("KaTeX Block Error: ", err);
+                        const errSpan = document.createElement("span");
+                        errSpan.style.color = "#f87171";
+                        errSpan.textContent = "KaTeX Block Error: " + err.message;
+                        pre.parentNode.replaceChild(errSpan, pre);
+                    }
+                }
+            });
+
+            // 2. Render inline math from <span class="math-inline">
+            const inlineMaths = document.querySelectorAll(".math-inline");
+            inlineMaths.forEach(span => {
+                const container = document.createElement("span");
+                const code = span.textContent.trim();
+                try {
+                    katex.render(code, container, { displayMode: false, throwOnError: true });
+                    span.parentNode.replaceChild(container, span);
+                } catch (err) {
+                    console.error("KaTeX Inline Error: ", err);
+                    span.style.color = "#f87171";
+                    span.textContent = "KaTeX Inline Error: " + err.message;
+                }
+            });
+        }
+
+        // 3. Render mermaid diagrams
+        if (typeof mermaid !== "undefined") {
+            const codeBlocks = document.querySelectorAll(".language-mermaid");
+            codeBlocks.forEach(block => {
+                const pre = block.closest("pre");
+                if (pre) {
+                    const container = document.createElement("div");
+                    container.className = "mermaid";
+                    container.textContent = block.textContent;
+                    pre.parentNode.replaceChild(container, pre);
+                }
+            });
+            try {
+                mermaid.run();
+            } catch (e) {
+                console.error("Mermaid run error: ", e);
+            }
+        }
+    });
+</script>

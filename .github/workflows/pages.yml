@@ -42,7 +42,7 @@ jobs:
 
       - name: Generate Cargo Docs
         env:
-          RUSTDOCFLAGS: "-D warnings"
+          RUSTDOCFLAGS: "--html-in-header docs/header.html -D warnings"
         run: cargo doc --no-deps --all-features
 
       - name: Add Redirect Index Page

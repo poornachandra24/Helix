@@ -7,7 +7,7 @@ Helix implements an offline, high-performance semantic memory store to persist a
 ## 1. Subsystem Components
 
 *   **SQLite Metadata Store & FTS5 BM25 Search**: A local SQL database (`memory_meta.db`) that stores text snippets, associated files, and workspace directories. Uses SQLite's FTS5 extension to perform full-text BM25 search alongside vector queries.
-*   **turbovec Quantized Index**: A high-performance vector index (`memory_index.tvim`) utilizing **4-bit Lloyd-Max Scalar Quantization** for 8x memory compression. Vectors are matched using SIMD-accelerated cosine similarity.
+*   **turbovec Quantized Index**: A high-performance vector index (`memory_index.tvim`) utilizing **4-bit TurboQuant Vector Quantization** for up to 16x memory compression. Vectors are matched using SIMD-accelerated cosine similarity.
 *   **fastembed-rs ONNX Embeddings**: Automatically loads and caches the `BAAI/bge-small-en-v1.5` text embedding model (384 dimensions) completely offline using ONNX Runtime.
 *   **BM25 Hybrid Retrieval**: Combines semantic embeddings with lexical FTS5 queries using Reciprocal Rank Fusion (RRF) to retrieve highly relevant context matches.
 *   **Post-Mortem Reflective Memory**: Automatically summarizes and index-serializes the user-agent interaction session upon exit, feeding into long-term recall cache.
