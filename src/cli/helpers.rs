@@ -530,10 +530,7 @@ fn redact_secrets(input: &str) -> String {
                 if val_len >= 6 {
                     result.push_str("***REDACTED***");
                 } else {
-                    // Too short to be a real secret — keep as-is
-                    for j in val_start..i {
-                        result.push(chars[j]);
-                    }
+                    result.extend(chars[val_start..i].iter());
                 }
                 continue;
             }
@@ -560,9 +557,7 @@ fn redact_secrets(input: &str) -> String {
             }
             rest = rest_trimmed;
             // consume the value token (until whitespace or quote or end)
-            let end = rest
-                .find(|c: char| c == ' ' || c == '"' || c == '\'' || c == '\n')
-                .unwrap_or(rest.len());
+            let end = rest.find(&[' ', '"', '\'', '\n']).unwrap_or(rest.len());
             if end >= 6 {
                 new_out.push_str("***REDACTED***");
             } else {

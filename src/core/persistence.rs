@@ -136,12 +136,13 @@ fn redact_value(value: &mut Value) {
         Value::Object(map) => {
             for (k, v) in map.iter_mut() {
                 let lower_k = k.to_lowercase();
-                if lower_k.contains("api_key")
+                let is_secret = lower_k.contains("api_key")
                     || lower_k.contains("secret")
-                    || lower_k.contains("password")
-                {
+                    || lower_k.contains("password");
+                if is_secret {
                     if let Value::String(s) = v {
-                        if !s.is_empty() {
+                        let is_empty = s.is_empty();
+                        if !is_empty {
                             *s = "[REDACTED_CREDENTIALS]".to_string();
                             continue;
                         }

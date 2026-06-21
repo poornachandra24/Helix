@@ -147,16 +147,15 @@ fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
 
     let query = input.to_lowercase();
     if "/resume".starts_with(&query) || query.starts_with("/resume") {
-        if let Ok(sessions) = crate::core::persistence::list_sessions() {
-            for s in sessions.iter().take(3) {
-                commands.push((
-                    format!("/resume {}", s.id),
-                    format!(
-                        "resume session from {}",
-                        s.modified_at.format("%Y-%m-%d %H:%M")
-                    ),
-                ));
-            }
+        let sessions = crate::core::persistence::list_sessions().unwrap_or_default();
+        for s in sessions.iter().take(3) {
+            commands.push((
+                format!("/resume {}", s.id),
+                format!(
+                    "resume session from {}",
+                    s.modified_at.format("%Y-%m-%d %H:%M")
+                ),
+            ));
         }
     }
 
@@ -223,13 +222,13 @@ fn render_suggestions_inline(
 struct RawModeGuard;
 impl RawModeGuard {
     fn new() -> Self {
-        Self::default()
+        let _ = crossterm::terminal::enable_raw_mode();
+        Self
     }
 }
 impl Default for RawModeGuard {
     fn default() -> Self {
-        let _ = crossterm::terminal::enable_raw_mode();
-        Self
+        Self::new()
     }
 }
 impl Drop for RawModeGuard {
@@ -397,7 +396,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             let _ = io::stdout().flush();
 
             loop {
-                let event = match tokio::task::spawn_blocking(|| crossterm::event::read()).await {
+                let event = match tokio::task::spawn_blocking(crossterm::event::read).await {
                     Ok(Ok(ev)) => ev,
                     _ => {
                         generate_and_save_reflection(&mut engine).await;
@@ -1765,31 +1764,30 @@ async fn generate_and_save_reflection(engine: &mut engine::Engine) {
     {
         Ok(model_response) => {
             if let crate::model::ModelResponse::EndTurn(summary_text) = model_response {
-                if !summary_text.trim().is_empty() {
-                    if let Ok(state_dir) = config::get_state_dir() {
-                        let memory_sessions_dir = state_dir.join("memory").join("sessions");
-                        if let Err(e) = std::fs::create_dir_all(&memory_sessions_dir) {
-                            eprintln!("⚠️  Failed to create memory directory: {}", e);
-                            return;
-                        }
-                        let summary_path =
-                            memory_sessions_dir.join(format!("{}.md", engine.session.id));
-                        if let Err(e) = std::fs::write(&summary_path, &summary_text) {
-                            eprintln!("⚠️  Failed to write reflection summary: {}", e);
-                        } else {
-                            println!(
-                                "✔ [Memory] Reflection summary saved to: {}",
-                                summary_path.display()
-                            );
-                            if let Some(ref mut memory_engine) = engine.memory {
-                                if let Err(e) = memory_engine.insert(&summary_text, None, "global")
-                                {
-                                    eprintln!("⚠️  Failed to index reflective memory: {}", e);
-                                } else {
-                                    println!(
-                                        "✔ [Memory] Reflective summary indexed successfully in local semantic memory!"
-                                    );
-                                }
+                let summary_trimmed = summary_text.trim();
+                if !summary_trimmed.is_empty() && config::get_state_dir().is_ok() {
+                    let state_dir = config::get_state_dir().unwrap();
+                    let memory_sessions_dir = state_dir.join("memory").join("sessions");
+                    if let Err(e) = std::fs::create_dir_all(&memory_sessions_dir) {
+                        eprintln!("⚠️  Failed to create memory directory: {}", e);
+                        return;
+                    }
+                    let summary_path =
+                        memory_sessions_dir.join(format!("{}.md", engine.session.id));
+                    if let Err(e) = std::fs::write(&summary_path, &summary_text) {
+                        eprintln!("⚠️  Failed to write reflection summary: {}", e);
+                    } else {
+                        println!(
+                            "✔ [Memory] Reflection summary saved to: {}",
+                            summary_path.display()
+                        );
+                        if let Some(ref mut memory_engine) = engine.memory {
+                            if let Err(e) = memory_engine.insert(&summary_text, None, "global") {
+                                eprintln!("⚠️  Failed to index reflective memory: {}", e);
+                            } else {
+                                println!(
+                                    "✔ [Memory] Reflective summary indexed successfully in local semantic memory!"
+                                );
                             }
                         }
                     }
@@ -1837,27 +1835,22 @@ async fn generate_and_save_reflection_bg(
     {
         Ok(model_response) => {
             if let crate::model::ModelResponse::EndTurn(summary_text) = model_response {
-                if !summary_text.trim().is_empty() {
-                    if let Ok(state_dir) = config::get_state_dir() {
-                        let memory_sessions_dir = state_dir.join("memory").join("sessions");
-                        if let Err(e) = std::fs::create_dir_all(&memory_sessions_dir) {
-                            eprintln!("⚠️  Failed to create memory directory in background: {}", e);
-                            return;
-                        }
-                        let summary_path = memory_sessions_dir.join(format!("{}.md", session_id));
-                        if let Err(e) = std::fs::write(&summary_path, &summary_text) {
-                            eprintln!(
-                                "⚠️  Failed to write reflection summary in background: {}",
-                                e
-                            );
-                        } else {
-                            if let Err(e) = memory_engine.insert(&summary_text, None, "global") {
-                                eprintln!(
-                                    "⚠️  Failed to index reflective memory in background: {}",
-                                    e
-                                );
-                            }
-                        }
+                let summary_trimmed = summary_text.trim();
+                if !summary_trimmed.is_empty() && config::get_state_dir().is_ok() {
+                    let state_dir = config::get_state_dir().unwrap();
+                    let memory_sessions_dir = state_dir.join("memory").join("sessions");
+                    if let Err(e) = std::fs::create_dir_all(&memory_sessions_dir) {
+                        eprintln!("⚠️  Failed to create memory directory in background: {}", e);
+                        return;
+                    }
+                    let summary_path = memory_sessions_dir.join(format!("{}.md", session_id));
+                    if let Err(e) = std::fs::write(&summary_path, &summary_text) {
+                        eprintln!(
+                            "⚠️  Failed to write reflection summary in background: {}",
+                            e
+                        );
+                    } else if let Err(e) = memory_engine.insert(&summary_text, None, "global") {
+                        eprintln!("⚠️  Failed to index reflective memory in background: {}", e);
                     }
                 }
             }

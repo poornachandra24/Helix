@@ -193,16 +193,16 @@ impl HelixMemoryEngine {
             .join(" OR ");
 
         if !fts_query.is_empty() {
-            if let Ok(mut stmt) = self.db.prepare(
+            let prep_res = self.db.prepare(
                 "SELECT id, text, file_path, bm25(memory_fts) as score \
                  FROM memory_fts \
                  JOIN memory_metadata ON memory_metadata.id = memory_fts.rowid \
                  WHERE (memory_metadata.workspace_path = ? OR memory_metadata.workspace_path = 'global') AND memory_fts MATCH ? \
                  ORDER BY score ASC LIMIT ?",
-            ) {
-                if let Ok(mut rows) =
-                    stmt.query(rusqlite::params![workspace_path, fts_query, limit])
-                {
+            );
+            if let Ok(mut stmt) = prep_res {
+                let query_res = stmt.query(rusqlite::params![workspace_path, fts_query, limit]);
+                if let Ok(mut rows) = query_res {
                     while let Ok(Some(row)) = rows.next() {
                         if let (Ok(id), Ok(text), Ok(file_path), Ok(score)) = (
                             row.get::<_, u64>(0),
@@ -220,7 +220,8 @@ impl HelixMemoryEngine {
         // 2. Run Dense Vector matching
         let mut dense_matches = Vec::new();
         if !self.index.is_empty() {
-            if let Ok(query_vector) = self.embed_text(query) {
+            let query_vec_res = self.embed_text(query);
+            if let Ok(query_vector) = query_vec_res {
                 let mut adjusted_vector = query_vector;
                 if let Some(sona_engine) = sona {
                     let mut shift = vec![0.0f32; 384];
@@ -231,13 +232,10 @@ impl HelixMemoryEngine {
                 }
 
                 // Retrieve candidate row IDs for the active workspace and global memories
-                if let Ok(mut stmt) = self
-                    .db
-                    .prepare("SELECT id FROM memory_metadata WHERE workspace_path = ? OR workspace_path = 'global'")
-                {
-                    if let Ok(sqlite_ids) =
-                        stmt.query_map([workspace_path], |row| row.get::<_, u64>(0))
-                    {
+                let prep_res = self.db.prepare("SELECT id FROM memory_metadata WHERE workspace_path = ? OR workspace_path = 'global'");
+                if let Ok(mut stmt) = prep_res {
+                    let query_res = stmt.query_map([workspace_path], |row| row.get::<_, u64>(0));
+                    if let Ok(sqlite_ids) = query_res {
                         let allowed_ids: Vec<u64> = sqlite_ids
                             .filter_map(Result::ok)
                             .filter(|&id| self.index.contains(id))
@@ -250,16 +248,16 @@ impl HelixMemoryEngine {
                                 Some(&allowed_ids),
                             );
                             for (score, id) in scores.into_iter().zip(ids) {
-                                if let Ok(mut stmt) = self.db.prepare(
+                                if let Ok((text, file_path)) = self.db.query_row(
                                     "SELECT text, file_path FROM memory_metadata WHERE id = ?",
+                                    [id],
+                                    |row| {
+                                        let t: String = row.get(0).unwrap_or_default();
+                                        let f: Option<String> = row.get(1).unwrap_or(None);
+                                        Ok((t, f))
+                                    },
                                 ) {
-                                    if let Ok(mut rows) = stmt.query([id]) {
-                                        if let Ok(Some(row)) = rows.next() {
-                                            let text: String = row.get(0).unwrap_or_default();
-                                            let file_path: Option<String> = row.get(1).ok();
-                                            dense_matches.push((id, text, file_path, score));
-                                        }
-                                    }
+                                    dense_matches.push((id, text, file_path, score));
                                 }
                             }
                         }
