@@ -32,7 +32,7 @@ pub struct ToolCall {
 #[derive(Debug)]
 pub enum ModelResponse {
     /// One or more tool invocations requested by the model.
-    ToolCalls(Vec<ToolCall>),
+    ToolCalls(Vec<ToolCall>, Value),
     /// The model has finished and returned a final answer.
     EndTurn(String),
     /// The model returned malformed tool-call JSON — triggers the Local Healer.
@@ -166,29 +166,35 @@ impl OpenAiCompatibleAdapter {
 
                 let active_level = self.thinking_level.read().ok().and_then(|r| r.clone());
                 if let Some(level) = &active_level {
-                    let level_lower = level.to_lowercase();
-                    if level_lower == "off" || level_lower == "disabled" {
-                        payload["reasoning_effort"] = json!("low");
-                        payload["thinking_config"] = json!({ "thinking_budget": 0 });
-                    } else if level_lower == "low" {
-                        payload["reasoning_effort"] = json!("low");
-                        payload["thinking_config"] = json!({ "thinking_budget": 1024 });
-                    } else if level_lower == "medium" {
-                        payload["reasoning_effort"] = json!("medium");
-                        payload["thinking_config"] = json!({ "thinking_budget": 4096 });
-                    } else if level_lower == "high" {
-                        payload["reasoning_effort"] = json!("high");
-                        payload["thinking_config"] = json!({ "thinking_budget": 16384 });
-                    } else if let Ok(budget) = level.parse::<u64>() {
-                        payload["thinking_config"] = json!({ "thinking_budget": budget });
-                        let effort = if budget < 2048 {
-                            "low"
-                        } else if budget < 8192 {
-                            "medium"
-                        } else {
-                            "high"
-                        };
-                        payload["reasoning_effort"] = json!(effort);
+                    let model_lower = self.config.active_model.to_lowercase();
+                    let provider_lower = self.config.active_provider.to_lowercase();
+                    let is_gemini =
+                        model_lower.contains("gemini") || provider_lower.contains("gemini");
+                    if !is_gemini {
+                        let level_lower = level.to_lowercase();
+                        if level_lower == "off" || level_lower == "disabled" {
+                            payload["reasoning_effort"] = json!("low");
+                            payload["thinking_config"] = json!({ "thinking_budget": 0 });
+                        } else if level_lower == "low" {
+                            payload["reasoning_effort"] = json!("low");
+                            payload["thinking_config"] = json!({ "thinking_budget": 1024 });
+                        } else if level_lower == "medium" {
+                            payload["reasoning_effort"] = json!("medium");
+                            payload["thinking_config"] = json!({ "thinking_budget": 4096 });
+                        } else if level_lower == "high" {
+                            payload["reasoning_effort"] = json!("high");
+                            payload["thinking_config"] = json!({ "thinking_budget": 16384 });
+                        } else if let Ok(budget) = level.parse::<u64>() {
+                            payload["thinking_config"] = json!({ "thinking_budget": budget });
+                            let effort = if budget < 2048 {
+                                "low"
+                            } else if budget < 8192 {
+                                "medium"
+                            } else {
+                                "high"
+                            };
+                            payload["reasoning_effort"] = json!(effort);
+                        }
                     }
                 }
 
@@ -307,7 +313,27 @@ impl OpenAiCompatibleAdapter {
                 });
             }
             if !calls.is_empty() {
-                return Ok(ModelResponse::ToolCalls(calls));
+                let normalized_message = match format {
+                    ApiFormat::OpenAiCompatible => message.clone(),
+                    ApiFormat::OllamaNative => {
+                        let tool_calls_json: Vec<Value> = calls
+                            .iter()
+                            .map(|c| {
+                                json!({
+                                    "id": c.id,
+                                    "type": "function",
+                                    "function": { "name": c.name, "arguments": c.args.to_string() }
+                                })
+                            })
+                            .collect();
+                        json!({
+                            "role": "assistant",
+                            "content": message.get("content").cloned().unwrap_or(Value::Null),
+                            "tool_calls": tool_calls_json
+                        })
+                    }
+                };
+                return Ok(ModelResponse::ToolCalls(calls, normalized_message));
             }
         }
 
@@ -339,11 +365,27 @@ impl OpenAiCompatibleAdapter {
                     .or_else(|| parsed.get("args"))
                     .cloned()
                     .unwrap_or_else(|| json!({}));
-                Some(ModelResponse::ToolCalls(vec![ToolCall {
+                let calls = vec![ToolCall {
                     id: "md-0".into(),
                     name,
                     args,
-                }]))
+                }];
+                let tool_calls_json: Vec<Value> = calls
+                    .iter()
+                    .map(|c| {
+                        json!({
+                            "id": c.id,
+                            "type": "function",
+                            "function": { "name": c.name, "arguments": c.args.to_string() }
+                        })
+                    })
+                    .collect();
+                let normalized_message = json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": tool_calls_json
+                });
+                Some(ModelResponse::ToolCalls(calls, normalized_message))
             }
             Err(e) => Some(ModelResponse::ParseError {
                 raw_text: text.to_string(),
@@ -415,6 +457,16 @@ impl OpenAiCompatibleAdapter {
                             if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                                 acc_tool_calls[idx].id = Some(id.to_string());
                             }
+                            if let Some(sig) = tc
+                                .get("thought_signature")
+                                .or_else(|| tc.get("thoughtSignature"))
+                                .and_then(|v| v.as_str())
+                            {
+                                acc_tool_calls[idx].thought_signature = Some(sig.to_string());
+                            }
+                            if let Some(extra) = tc.get("extra_content") {
+                                acc_tool_calls[idx].extra_content = Some(extra.clone());
+                            }
                             if let Some(func) = tc.get("function") {
                                 if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
                                     acc_tool_calls[idx].name = Some(name.to_string());
@@ -455,6 +507,8 @@ impl OpenAiCompatibleAdapter {
                             id: Some(id),
                             name: Some(name),
                             arguments: args_str,
+                            thought_signature: None,
+                            extra_content: None,
                         });
                     }
                 }
@@ -470,6 +524,8 @@ struct AccumulatedToolCall {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
+    thought_signature: Option<String>,
+    extra_content: Option<Value>,
 }
 
 #[async_trait]
@@ -574,9 +630,10 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
 
             if !acc_tool_calls.is_empty() {
                 let mut calls = Vec::new();
+                let mut tool_calls_json = Vec::new();
                 for (idx, atc) in acc_tool_calls.into_iter().enumerate() {
-                    let name = atc.name.unwrap_or_default();
-                    let id = atc.id.unwrap_or_else(|| format!("call_{}", idx));
+                    let name = atc.name.clone().unwrap_or_default();
+                    let id = atc.id.clone().unwrap_or_else(|| format!("call_{}", idx));
                     let args_str = atc.arguments.trim();
                     let args = if args_str.is_empty() {
                         json!({})
@@ -591,9 +648,32 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                             }
                         }
                     };
-                    calls.push(ToolCall { id, name, args });
+                    calls.push(ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        args: args.clone(),
+                    });
+
+                    let mut tc_val = json!({
+                        "id": id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": args.to_string() }
+                    });
+                    if let Some(sig) = atc.thought_signature {
+                        tc_val["thought_signature"] = json!(sig);
+                    }
+                    if let Some(extra) = atc.extra_content {
+                        tc_val["extra_content"] = extra;
+                    }
+                    tool_calls_json.push(tc_val);
                 }
-                Ok(ModelResponse::ToolCalls(calls))
+
+                let normalized_message = json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": tool_calls_json,
+                });
+                Ok(ModelResponse::ToolCalls(calls, normalized_message))
             } else {
                 if let Some(resp) = self.try_parse_markdown_tool_call(&full_text) {
                     return Ok(resp);

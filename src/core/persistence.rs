@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use serde_json::Value;
@@ -74,6 +76,35 @@ impl Session {
         }
 
         Ok(messages)
+    }
+
+    /// Remove the last turn (from the last user_input onwards) from the session file.
+    pub fn forget_last_turn(&self) -> Result<bool> {
+        if !self.path.exists() {
+            return Ok(false);
+        }
+        let content = fs::read_to_string(&self.path)?;
+        let lines: Vec<&str> = content.lines().collect();
+        let mut last_user_idx = None;
+        for (i, line) in lines.iter().enumerate() {
+            if let Ok(event) = serde_json::from_str::<Value>(line) {
+                if event["event"].as_str() == Some("user_input") {
+                    last_user_idx = Some(i);
+                }
+            }
+        }
+
+        if let Some(idx) = last_user_idx {
+            let kept_lines = &lines[..idx];
+            let mut new_content = kept_lines.join("\n");
+            if !kept_lines.is_empty() {
+                new_content.push('\n');
+            }
+            fs::write(&self.path, new_content)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 

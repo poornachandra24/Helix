@@ -1,5 +1,8 @@
+#![allow(clippy::collapsible_if, clippy::collapsible_match, clippy::too_many_arguments, clippy::for_kv_map)]
+
 use anyhow::Result;
 use console::style;
+use owo_colors::OwoColorize;
 use ruvector_sona::SonaEngine;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -47,6 +50,8 @@ pub struct Engine {
     pub sona: Option<Arc<SonaEngine>>,
     /// Pre-computed embeddings for greetings and starter queries.
     pub semantic_cache: Vec<(String, String, Vec<f32>)>,
+    pub core_tools: std::collections::HashMap<String, Arc<dyn crate::tools::Tool>>,
+    pub dynamic_registry: crate::tools::SharedRegistryState,
 }
 
 impl Engine {
@@ -55,6 +60,8 @@ impl Engine {
         context: ContextManager,
         tools: ToolRegistry,
         session: Session,
+        core_tools: std::collections::HashMap<String, Arc<dyn crate::tools::Tool>>,
+        dynamic_registry: crate::tools::SharedRegistryState,
     ) -> Self {
         Self {
             model,
@@ -68,6 +75,8 @@ impl Engine {
             memory: None,
             sona: None,
             semantic_cache: vec![],
+            core_tools,
+            dynamic_registry,
         }
     }
 
@@ -264,7 +273,7 @@ impl Engine {
                 .await?;
 
             match response {
-                ModelResponse::ToolCalls(_) | ModelResponse::EndTurn(_) => {
+                ModelResponse::ToolCalls(..) | ModelResponse::EndTurn(_) => {
                     return Ok((response, retries_used));
                 }
                 ModelResponse::ParseError { raw_text, error } => {
@@ -306,8 +315,19 @@ impl Engine {
         let results = if needs_serial || calls.len() == 1 {
             let mut results = Vec::new();
             for call in calls {
+                let requires_confirm = self
+                    .tools
+                    .get(&call.name)
+                    .map(|t| t.requires_confirmation())
+                    .unwrap_or(false);
+
                 if let Some(ref tx) = stream_tx {
-                    let _ = tx.send(format!("\x1b[SExecuting {}...", call.name));
+                    if requires_confirm {
+                        let _ = tx.send("\x03".to_string());
+                    } else {
+                        let _ = tx.send("\x02".to_string());
+                        let _ = tx.send(format!("\x1b[SExecuting {}...", call.name));
+                    }
                 }
                 let result = match self.tools.dispatch(&call.name, call.args.clone()).await {
                     Ok(r) => r,
@@ -317,20 +337,11 @@ impl Engine {
             }
             results
         } else {
-            let msg = format!(
-                "{} {} Tool: Executing {} read-only tool(s) concurrently in parallel tasks",
-                style("  │  ").color256(240),
-                style("⚙").color256(220),
-                style(calls.len()).bold()
-            );
             if let Some(ref tx) = stream_tx {
-                let _ = tx.send(format!("\x1b[T{}", msg));
                 let _ = tx.send(format!(
                     "\x1b[SRunning {} tools concurrently...",
                     calls.len()
                 ));
-            } else {
-                println!("{}", msg);
             }
             let mut handles = Vec::new();
             for call in &calls {
@@ -477,8 +488,43 @@ impl Engine {
         self.session
             .append(json!({"event": "user_input", "content": input}))?;
 
+        // Classify query complexity
+        let complexity_system_prompt = "You are a query complexity classifier. Classify the user query as 'complex' (if it requires planning, tools, coding, file access, bash commands, or multi-step execution) or 'simple' (if it is a greeting, basic question, simple explanation, or conversational prompt). Output ONLY 'complex' or 'simple' with no other text.";
+        let mut is_complex = false;
+        if let Ok(ModelResponse::EndTurn(classification)) = self
+            .model
+            .call(
+                complexity_system_prompt,
+                &[json!({"role": "user", "content": input})],
+                vec![],
+                None,
+            )
+            .await
+        {
+            if classification.trim().to_lowercase().contains("complex") {
+                is_complex = true;
+            }
+        }
+
+        if is_complex {
+            // Initialize the workspace scratchpad at the start of a complex turn
+            let scratchpad_header = format!(
+                "# Helix Scratchpad & Planning Log\n\n**Current Goal**: {}\n",
+                input
+            );
+            let _ = std::fs::write(".helix_scratchpad.md", &scratchpad_header);
+        } else {
+            // Ensure no stale scratchpad is left over
+            let _ = std::fs::remove_file(".helix_scratchpad.md");
+        }
+
         // 1. Retrieve relevant workspace memories and append them to the system prompt
         let mut final_system_prompt = system_prompt.to_string();
+        let current_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        final_system_prompt.push_str(&format!(
+            "\n\n### SYSTEM TEMPORAL CONTEXT:\n- Current Local Time: {}\n",
+            current_time
+        ));
         let mut retrieved_texts = Vec::new();
         if let Some(ref mut memory_engine) = self.memory {
             if let Some(ref tx) = stream_tx {
@@ -526,17 +572,45 @@ impl Engine {
             }
         }
 
+        let mut executed_tools = Vec::new();
         let stream_tx_clone = stream_tx.clone();
         let result = self
             .run_turn_inner(
                 &final_system_prompt,
+                input,
                 stream_tx,
                 &mut turn_steps,
                 &mut turn_tool_calls,
                 &mut turn_healer_retries,
                 &mut turn_compaction_fired,
+                &mut executed_tools,
             )
             .await;
+
+        if !executed_tools.is_empty() {
+            if let Some(ref tx) = stream_tx_clone {
+                let mut counts = std::collections::HashMap::new();
+                for t in &executed_tools {
+                    *counts.entry(t).or_insert(0) += 1;
+                }
+                let mut parts = Vec::new();
+                for (name, count) in counts {
+                    if count > 1 {
+                        parts.push(format!("{} ({})", name, count));
+                    } else {
+                        parts.push(name.clone());
+                    }
+                }
+                parts.sort();
+                let summary = format!(
+                    "  ● [Executed {} tool{}: {}]",
+                    executed_tools.len(),
+                    if executed_tools.len() > 1 { "s" } else { "" },
+                    parts.join(", ")
+                );
+                let _ = tx.send(format!("\x1b[T{}", style(summary).color256(243)));
+            }
+        }
 
         if let Some(ref tx) = stream_tx_clone {
             let _ = tx.send("\x04".to_string());
@@ -650,25 +724,39 @@ impl Engine {
     async fn run_turn_inner(
         &mut self,
         system_prompt: &str,
+        input: &str,
         stream_tx: Option<UnboundedSender<String>>,
         steps_out: &mut usize,
         tool_calls_out: &mut usize,
         healer_retries_out: &mut usize,
         compaction_fired_out: &mut bool,
+        executed_tools: &mut Vec<String>,
     ) -> Result<String> {
         for step in 1..=self.max_iterations {
             *steps_out = step;
             tracing::info!(step, max = self.max_iterations, "Agent step");
 
             if let Some(ref tx) = stream_tx {
-                // Compact dim label — no trailing dashes
-                let loop_label =
-                    style(format!("  · loop {}/{}", step, self.max_iterations)).color256(240);
-                let _ = tx.send(format!("\x1b[T{}", loop_label));
-                let _ = tx.send(format!(
-                    "\x1b[SWorking (loop {}/{})...",
-                    step, self.max_iterations
-                ));
+                let _ = tx.send(format!("\x1b[SWorking (step {})...", step));
+            }
+
+            let mut tool_counts = std::collections::HashMap::new();
+            for name in executed_tools.iter() {
+                *tool_counts.entry(name.clone()).or_insert(0) += 1;
+            }
+            for (name, count) in tool_counts {
+                if count >= 5 {
+                    let warning = format!(
+                        "[System Note]: You have already called the '{}' tool {} times in this turn. \
+                        To prevent infinite loops, further calls to '{}' are restricted. \
+                        Please summarize the results you have obtained so far and provide your final answer or state what you could not find.",
+                        name, count, name
+                    );
+                    self.global_messages.push(json!({
+                        "role": "user",
+                        "content": warning
+                    }));
+                }
             }
 
             let (compacted, was_compacted) =
@@ -683,9 +771,65 @@ impl Engine {
             }
             self.global_messages = compacted;
 
+            // Check if dynamic registry state has changed
+            let mut rebuilt_tools = None;
+            {
+                let mut state = self.dynamic_registry.lock().unwrap();
+                if state.changed {
+                    state.changed = false;
+                    let mut new_tools = ToolRegistry::new();
+                    // Register all core tools
+                    for (_name, tool) in &self.core_tools {
+                        new_tools.register_arc(tool.clone());
+                    }
+                    // Register all active MCP tools
+                    for active_t in &state.active_tools {
+                        if let Some(tool) = state.all_mcp_tools.get(active_t) {
+                            new_tools.register_arc(tool.clone());
+                        }
+                    }
+                    rebuilt_tools = Some(new_tools);
+                }
+            }
+            if let Some(new_tools) = rebuilt_tools {
+                self.update_tools(new_tools);
+            }
+
+            // Dynamic workspace scratchpad injection
+            let mut step_system_prompt = system_prompt.to_string();
+            // Append dynamically active skills
+            {
+                let state = self.dynamic_registry.lock().unwrap();
+                let mut skill_sections = Vec::new();
+                for active_s in &state.active_skills {
+                    if let Some(content) = state.all_skills.get(active_s) {
+                        skill_sections.push(format!(
+                            "--- Skill: {} ---\n{}",
+                            active_s,
+                            content.trim()
+                        ));
+                    }
+                }
+                if !skill_sections.is_empty() {
+                    step_system_prompt.push_str(&format!(
+                        "\n\nYou have the following domain-specific skills loaded in your context:\n{}",
+                        skill_sections.join("\n\n")
+                    ));
+                }
+            }
+
+            if let Ok(scratchpad_content) = std::fs::read_to_string(".helix_scratchpad.md") {
+                if !scratchpad_content.trim().is_empty() {
+                    step_system_prompt.push_str(&format!(
+                        "\n\n### ACTIVE WORKSPACE SCRATCHPAD & PLANNING LOG:\n{}\n",
+                        scratchpad_content
+                    ));
+                }
+            }
+
             let tx = stream_tx.clone();
             let (response, retries) = self
-                .get_valid_action(system_prompt, &self.global_messages, tx)
+                .get_valid_action(&step_system_prompt, &self.global_messages, tx)
                 .await?;
             *healer_retries_out += retries;
 
@@ -699,39 +843,12 @@ impl Engine {
                     return Ok(text);
                 }
 
-                ModelResponse::ToolCalls(calls) => {
-                    let tool_names = calls
-                        .iter()
-                        .map(|c| c.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let dispatch_msg = format!(
-                        "  {} Tool: dispatching {} → {}",
-                        style("⦿").color256(220),
-                        style(calls.len()).bold().color256(253),
-                        style(&tool_names).cyan().bold()
-                    );
-                    if let Some(ref tx) = stream_tx {
-                        let _ = tx.send(format!("\x1b[T{}", dispatch_msg));
-                    } else {
-                        println!("{}", dispatch_msg);
+                ModelResponse::ToolCalls(calls, raw_msg) => {
+                    for call in &calls {
+                        executed_tools.push(call.name.clone());
                     }
 
-                    let tool_calls_json: Vec<Value> = calls
-                        .iter()
-                        .map(|c| {
-                            json!({
-                                "id": c.id,
-                                "type": "function",
-                                "function": { "name": c.name, "arguments": c.args.to_string() }
-                            })
-                        })
-                        .collect();
-                    self.global_messages.push(json!({
-                        "role": "assistant",
-                        "content": null,
-                        "tool_calls": tool_calls_json,
-                    }));
+                    self.global_messages.push(raw_msg);
 
                     self.session.append(json!({
                         "event": "tool_calls",
@@ -741,6 +858,7 @@ impl Engine {
                     let (results, dispatched) = self.dispatch_tools(calls, stream_tx.clone()).await;
                     *tool_calls_out += dispatched;
 
+                    let mut step_failures = Vec::new();
                     for (call, result) in results {
                         tracing::debug!(tool = %call.name, result = %result, "Tool result");
                         self.session.append(json!({
@@ -749,22 +867,18 @@ impl Engine {
                             "result": &result,
                         }))?;
 
-                        if let Some(ref tx) = stream_tx {
-                            let check = style("✓").color256(46);
-                            let status_text =
-                                if result.contains("Error") || result.contains("failed") {
-                                    style("failed").red().bold()
-                                } else {
-                                    style("completed").green()
-                                };
-                            let msg = format!(
-                                "  {} '{}' {} ({} bytes)",
-                                check,
-                                style(&call.name).cyan(),
-                                status_text,
-                                result.len()
-                            );
-                            let _ = tx.send(format!("\x1b[T{}", msg));
+                        if result.contains("User denied ") {
+                            if let Some(ref tx) = stream_tx {
+                                let _ = tx.send("\x03".to_string());
+                            }
+                            anyhow::bail!("Action authorization denied by user.");
+                        }
+
+                        let is_failure = result.contains("Error")
+                            || result.contains("failed")
+                            || result.contains("permission denied");
+                        if is_failure {
+                            step_failures.push((call.name.clone(), result.clone()));
                         }
 
                         // Truncate massively long tool outputs to prevent context window overflow / 500 errors
@@ -787,13 +901,206 @@ impl Engine {
                             "content":      content,
                         }));
                     }
+                    // Self-Correction & Planning Reflection logic (Runs on every step if scratchpad exists - meaning it's a complex query)
+                    let scratchpad_exists = std::path::Path::new(".helix_scratchpad.md").exists();
+                    if scratchpad_exists {
+                        let is_error_reflection = !step_failures.is_empty();
 
-                    // Close the step box for this tool-use step
-                    if let Some(ref tx) = stream_tx {
-                        let footer =
-                            style("  └──────────────────────────────────────────────────────────")
-                                .color256(240);
-                        let _ = tx.send(format!("\x1b[T{}", footer));
+                        // 1. Send warning/status to the user
+                        if let Some(ref tx) = stream_tx {
+                            let status_msg = if is_error_reflection {
+                                format!(
+                                    "    [Self-Correction] Failure detected in '{}'. Reflecting...",
+                                    style(&step_failures[0].0).cyan()
+                                )
+                            } else {
+                                format!(
+                                    "    [Planning] Step {} completed. Updating planning logs...",
+                                    step
+                                )
+                            };
+                            let _ = tx.send(format!("\x1b[T{}", status_msg));
+                        }
+
+                        // 2. Build the user prompt for reflection
+                        let user_content = if is_error_reflection {
+                            let mut failures_str = String::new();
+                            for (tool_name, error_msg) in &step_failures {
+                                failures_str.push_str(&format!(
+                                    "Tool '{}' failed with error:\n{}\n\n",
+                                    tool_name, error_msg
+                                ));
+                            }
+                            format!(
+                                "Here are the failures that just occurred:\n{}\nPlease reflect on these and output the JSON correction plan.",
+                                failures_str
+                            )
+                        } else {
+                            "Analyze the tools run and their results in this step. Reflect on progress and output the JSON planning/correction plan to guide the next steps.".to_string()
+                        };
+
+                        let reflection_system_prompt = "You are an autonomous AI agent's internal Self-Correction & Planning system. \
+                            Analyze the progress of the turn and formulate/update the plan. \
+                            Analyze in terms of the following principles:\n\
+                            1. Current State: What is the current state of files, progress, and errors?\n\
+                            2. Target State: What is the final target condition to resolve the goal?\n\
+                            3. Strategy & Gap: How does the strategy close the gap between current and target state?\n\n\
+                            Important Tips for Strategies:\n\
+                            - Never perform recursive directory searches on binary/build directories (like 'target/', '.git/', or 'node_modules/'). Always restrict grep/find commands to specific directories (e.g. 'src/', 'tests/').\n\
+                            - Double check path names and tool arguments before calling tools.\n\n\
+                            Output ONLY a JSON object in the following format, with no conversational text or preamble:\n\
+                            {\n\
+                              \"current_state\": \"1-sentence summary of current state and progress/failures\",\n\
+                              \"target_state\": \"1-sentence summary of the target state\",\n\
+                              \"strategy_to_close_gap\": \"1-sentence plan to close the gap\",\n\
+                              \"next_steps\": [\"Step 1 description\", \"Step 2 description\"]\n\
+                            }";
+
+                        let mut reflection_messages = self.global_messages.clone();
+                        reflection_messages.push(json!({
+                            "role": "user",
+                            "content": user_content
+                        }));
+
+                        // Call model without tools
+                        if let Ok(model_response) = self
+                            .model
+                            .call(
+                                reflection_system_prompt,
+                                &reflection_messages,
+                                vec![], // No tools for reflection
+                                None,
+                            )
+                            .await
+                        {
+                            if let ModelResponse::EndTurn(ref reflection_text) = model_response {
+                                if let Ok(parsed) =
+                                    serde_json::from_str::<Value>(reflection_text.trim())
+                                {
+                                    let current_state =
+                                        parsed["current_state"].as_str().unwrap_or("");
+                                    let target_state =
+                                        parsed["target_state"].as_str().unwrap_or("");
+                                    let strategy_to_close_gap =
+                                        parsed["strategy_to_close_gap"].as_str().unwrap_or("");
+                                    let next_steps = parsed["next_steps"].as_array();
+
+                                    if let Some(ref tx) = stream_tx {
+                                        let trace_header = format!(
+                                            "  {} {}",
+                                            style("▼").purple().bold(),
+                                            style("Thinking Process (Self-Correction & Planning)")
+                                                .purple()
+                                                .dimmed()
+                                        );
+                                        let _ = tx.send(format!("\x1b[T{}", trace_header));
+                                        let _ = tx.send(format!(
+                                            "\x1b[T    {} Current State: {}",
+                                            style("├─").purple().dimmed(),
+                                            style(current_state).color256(246)
+                                        ));
+                                        let _ = tx.send(format!(
+                                            "\x1b[T    {} Target State:  {}",
+                                            style("├─").purple().dimmed(),
+                                            style(target_state).color256(246)
+                                        ));
+                                        let _ = tx.send(format!(
+                                            "\x1b[T    {} Gap/Strategy:  {}",
+                                            style("├─").purple().dimmed(),
+                                            style(strategy_to_close_gap).color256(246)
+                                        ));
+                                        if let Some(steps) = next_steps {
+                                            let steps_str: Vec<String> = steps
+                                                .iter()
+                                                .map(|s| format!("'{}'", s.as_str().unwrap_or("")))
+                                                .collect();
+                                            let _ = tx.send(format!(
+                                                "\x1b[T    {} Next Steps:   [{}]",
+                                                style("└─").purple().dimmed(),
+                                                style(steps_str.join(", ")).color256(246)
+                                            ));
+                                        }
+                                        let _ = tx.send("\x1b[T".to_string());
+                                    }
+
+                                    let mut next_steps_md = String::new();
+                                    if let Some(steps) = next_steps {
+                                        for s in steps {
+                                            next_steps_md.push_str(&format!(
+                                                "  - {}\n",
+                                                s.as_str().unwrap_or("")
+                                            ));
+                                        }
+                                    }
+                                    let reflection_section = format!(
+                                        "\n## Latest Planning & Correction Reflection\n\
+                                         - **Current State**: {}\n\
+                                         - **Target State**: {}\n\
+                                         - **Strategy to Close Gap**: {}\n\
+                                         - **Proposed Next Steps**:\n{}\n",
+                                        current_state,
+                                        target_state,
+                                        strategy_to_close_gap,
+                                        next_steps_md
+                                    );
+
+                                    let clean_scratchpad = format!(
+                                        "# Helix Scratchpad & Planning Log\n\n\
+                                         **Current Goal**: {}\n\n\
+                                         {}\n",
+                                        input, reflection_section
+                                    );
+                                    let _ =
+                                        std::fs::write(".helix_scratchpad.md", clean_scratchpad);
+
+                                    let guidance_msg = format!(
+                                        "[System Note - Self-Correction Strategy]:\nCurrent State: {}\nTarget State: {}\nStrategy: {}\nFollow this strategy to close the gap.",
+                                        current_state, target_state, strategy_to_close_gap
+                                    );
+                                    self.global_messages.push(json!({
+                                        "role": "user",
+                                        "content": guidance_msg
+                                    }));
+                                } else {
+                                    if let Some(ref tx) = stream_tx {
+                                        let trace_header = format!(
+                                            "  {} {}",
+                                            style("▼").purple().bold(),
+                                            style("Thinking Process (Raw Trace)").purple().dimmed()
+                                        );
+                                        let _ = tx.send(format!("\x1b[T{}", trace_header));
+                                        for line in reflection_text.trim().lines() {
+                                            let _ = tx.send(format!(
+                                                "\x1b[T    {} {}",
+                                                style("│").purple().dimmed(),
+                                                style(line).color256(246)
+                                            ));
+                                        }
+                                        let _ = tx.send("\x1b[T".to_string());
+                                    }
+
+                                    let clean_scratchpad = format!(
+                                        "# Helix Scratchpad & Planning Log\n\n\
+                                         **Current Goal**: {}\n\n\
+                                         ## Latest Self-Correction Reflection\n\
+                                         {}\n",
+                                        input,
+                                        reflection_text.trim()
+                                    );
+                                    let _ =
+                                        std::fs::write(".helix_scratchpad.md", clean_scratchpad);
+
+                                    let guidance_msg = format!(
+                                        "[System Note - Self-Correction Strategy]:\n{}",
+                                        reflection_text.trim()
+                                    );
+                                    self.global_messages.push(json!({
+                                        "role": "user",
+                                        "content": guidance_msg
+                                    }));
+                                }
+                            }
+                        }
                     }
                 }
 
