@@ -280,6 +280,9 @@ impl Engine {
                     return Ok((response, retries_used));
                 }
                 ModelResponse::ParseError { raw_text, error } => {
+                    if let Some(ref tx_val) = stream_tx {
+                        let _ = tx_val.send("\x1b[R".to_string());
+                    }
                     println!("⚠️  {}", style("[Syntax Error: Auto-healing...]").yellow());
                     tracing::warn!(%error, "Tool JSON parse error, healing");
 
@@ -804,6 +807,9 @@ impl Engine {
                 }
 
                 ModelResponse::ToolCalls(calls, raw_msg) => {
+                    if let Some(ref tx) = stream_tx {
+                        let _ = tx.send("\x1b[R".to_string());
+                    }
                     // Initialize the workspace scratchpad on the fly when the first tool is called
                     if !std::path::Path::new(".helix_scratchpad.md").exists() {
                         let scratchpad_header = format!(

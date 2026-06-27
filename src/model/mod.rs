@@ -419,6 +419,18 @@ impl OpenAiCompatibleAdapter {
                 {
                     let delta = &choices[0]["delta"];
 
+                    // Reasoning/Thinking content
+                    if let Some(reasoning) = delta
+                        .get("reasoning_content")
+                        .or_else(|| delta.get("reasoning"))
+                        .or_else(|| delta.get("thought"))
+                        .and_then(|v| v.as_str())
+                        && !reasoning.is_empty()
+                        && let Some(tx) = stream_tx
+                    {
+                        let _ = tx.send(format!("\x1b[H{}", reasoning));
+                    }
+
                     // Text content
                     if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
                         full_text.push_str(content);
@@ -463,6 +475,17 @@ impl OpenAiCompatibleAdapter {
             }
             ApiFormat::OllamaNative => {
                 let message = &parsed["message"];
+                if let Some(reasoning) = message
+                    .get("reasoning_content")
+                    .or_else(|| message.get("reasoning"))
+                    .or_else(|| message.get("thought"))
+                    .and_then(|v| v.as_str())
+                    && !reasoning.is_empty()
+                    && let Some(tx) = stream_tx
+                {
+                    let _ = tx.send(format!("\x1b[H{}", reasoning));
+                }
+
                 if let Some(content) = message.get("content").and_then(|v| v.as_str()) {
                     full_text.push_str(content);
                     if let Some(tx) = stream_tx {

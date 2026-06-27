@@ -1729,6 +1729,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             let mut full_response = String::new();
             let mut telemetry_messages = Vec::new();
             let mut stream_tracker = StreamTracker::new(content_width);
+            let mut thinking_started = false;
 
             loop {
                 tokio::select! {
@@ -1745,8 +1746,27 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                     show_spinner = false;
                                 } else if token == "\x04" {
                                     show_spinner = false;
+                                } else if token == "\x1b[R" {
+                                    if stream_tracker.started {
+                                        stream_tracker.finish();
+                                    }
+                                    stream_tracker = StreamTracker::new(content_width);
+                                    full_response.clear();
+                                    thinking_started = false;
                                 } else if token.starts_with("\x1b[S") {
                                     spinner_suffix = token.strip_prefix("\x1b[S").unwrap_or("thinking...").to_string();
+                                } else if token.starts_with("\x1b[H") {
+                                    let msg = token.strip_prefix("\x1b[H").unwrap_or("").to_string();
+                                    if !stream_tracker.started {
+                                        if !thinking_started {
+                                            println!("  {}", style("▼ Thinking Process").cyan().bold());
+                                            thinking_started = true;
+                                        }
+                                        print!("{}", style(msg).dim());
+                                        io::stdout().flush().ok();
+                                    } else {
+                                        telemetry_messages.push(msg);
+                                    }
                                 } else if token.starts_with("\x1b[T") {
                                     let msg = token.strip_prefix("\x1b[T").unwrap_or("").to_string();
                                     if !stream_tracker.started {
@@ -1761,6 +1781,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                         print!("\r\x1B[K");
                                         io::stdout().flush().ok();
                                         show_spinner = false;
+                                    }
+                                    if thinking_started {
+                                        println!();
+                                        thinking_started = false;
                                     }
                                     stream_tracker.print_token(&token);
                                     full_response.push_str(&token);
@@ -2059,6 +2083,7 @@ struct StreamTracker {
     printed_lines: usize,
     started: bool,
     pipe: String,
+    leading_whitespace: String,
 }
 
 impl StreamTracker {
@@ -2068,6 +2093,7 @@ impl StreamTracker {
             printed_lines: 0,
             started: false,
             pipe: "│".yellow().to_string(),
+            leading_whitespace: String::new(),
         }
     }
 
@@ -2095,9 +2121,21 @@ impl StreamTracker {
 
     fn print_token(&mut self, token: &str) {
         if !self.started {
-            self.start();
+            if token.chars().all(|c| c.is_whitespace()) {
+                self.leading_whitespace.push_str(token);
+                return;
+            } else {
+                self.start();
+                if !self.leading_whitespace.is_empty() {
+                    let ws = std::mem::take(&mut self.leading_whitespace);
+                    self.print_token_inner(&ws);
+                }
+            }
         }
+        self.print_token_inner(token);
+    }
 
+    fn print_token_inner(&mut self, token: &str) {
         let content_width = get_content_width();
         let parts: Vec<&str> = token.split('\n').collect();
         for (i, part) in parts.iter().enumerate() {
