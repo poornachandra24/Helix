@@ -1,3 +1,5 @@
+#![allow(clippy::needless_borrow, clippy::collapsible_if, clippy::print_literal)]
+
 use anyhow::Result;
 use console::style;
 use owo_colors::OwoColorize;
@@ -32,6 +34,60 @@ fn get_content_width() -> usize {
     cols.saturating_sub(8).max(40)
 }
 
+fn print_message(role: &str, content: &str) {
+    let content_width = get_content_width();
+    let trimmed = content.trim();
+    if role == "user" {
+        let user_border = |s: &str| s.blue().to_string();
+        let user_header = |s: &str| s.blue().bold().to_string();
+        let user_pipe = "│".blue().to_string();
+
+        let title = "You";
+        let dashes_count = content_width.saturating_sub(title.len());
+        print!("  ");
+        print!("{}", user_border("╭── "));
+        print!("{}", user_header(title));
+        println!(
+            "{}",
+            user_border(&format!(" {}╮", "─".repeat(dashes_count)))
+        );
+        let wrapped_user = wrap_text(trimmed, content_width);
+        for line in wrapped_user {
+            let expanded_line = line.replace('\t', "    ");
+            let padded = format!("  {:width$}  ", expanded_line, width = content_width);
+            println!("  {}{}{}", user_pipe, padded, user_pipe);
+        }
+        println!(
+            "  {}",
+            user_border(&format!("╰{}╯", "─".repeat(content_width + 4)))
+        );
+    } else {
+        let border_color_fn = |s: &str| s.yellow().to_string();
+        let header_color_fn = |s: &str| s.yellow().bold().to_string();
+        let assistant_pipe = "│".yellow().to_string();
+
+        let title = "Helix";
+        let dashes_count = content_width.saturating_sub(title.len());
+        print!("  ");
+        print!("{}", border_color_fn("╭── "));
+        print!("{}", header_color_fn(title));
+        println!(
+            "{}",
+            border_color_fn(&format!(" {}╮", "─".repeat(dashes_count)))
+        );
+        let wrapped_assistant = wrap_text(trimmed, content_width);
+        for line in wrapped_assistant {
+            let expanded_line = line.replace('\t', "    ");
+            let padded = format!("  {:width$}  ", expanded_line, width = content_width);
+            println!("  {}{}{}", assistant_pipe, padded, assistant_pipe);
+        }
+        println!(
+            "  {}",
+            border_color_fn(&format!("╰{}╯", "─".repeat(content_width + 4)))
+        );
+    }
+}
+
 fn print_help() {
     use comfy_table::presets::NOTHING;
     use comfy_table::{Cell, ColumnConstraint, Table, Width};
@@ -63,6 +119,10 @@ fn print_help() {
             "show active model, context budget, SONA & optimization stats",
         ),
         ("/clear", "reset current chat history context"),
+        (
+            "/forget | /purge",
+            "delete the last user/assistant turn from active history, session file, and memory",
+        ),
         ("/config", "reconfigure active provider / model"),
         ("/providers", "list configured API providers"),
         (
@@ -98,7 +158,7 @@ fn print_help() {
     println!("{table}");
 }
 
-fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
+fn get_matching_commands_inline(input: &str, config: &config::AppConfig) -> Vec<(String, String)> {
     let mut commands = vec![
         ("/help".to_string(), "show this command guide".to_string()),
         (
@@ -110,6 +170,11 @@ fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
             "reset current chat history context".to_string(),
         ),
         (
+            "/forget".to_string(),
+            "delete the last user/assistant turn from active history, session file, and memory"
+                .to_string(),
+        ),
+        (
             "/config".to_string(),
             "reconfigure active provider / model".to_string(),
         ),
@@ -118,7 +183,7 @@ fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
             "list configured API providers".to_string(),
         ),
         (
-            "/use <name> [model]".to_string(),
+            "/use".to_string(),
             "hot-switch provider/model in the current session".to_string(),
         ),
         (
@@ -126,36 +191,133 @@ fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
             "list previous chat sessions".to_string(),
         ),
         (
-            "/resume <id>".to_string(),
+            "/resume".to_string(),
             "load a past session into the active context".to_string(),
         ),
         (
-            "/memory [query]".to_string(),
+            "/memory".to_string(),
             "search/manage semantic memory (use --clear to wipe)".to_string(),
         ),
         (
-            "/thinking [level]".to_string(),
-            "set or show reasoning effort/budget".to_string(),
+            "/thinking".to_string(),
+            "set or show reasoning level (low, medium, high, off, or integer budget)".to_string(),
         ),
         (
             "/optimize".to_string(),
             "force SONA neural adaptation & parameter consolidation".to_string(),
         ),
         ("/exit".to_string(), "exit the REPL session".to_string()),
-        ("/quit".to_string(), "exit the REPL session".to_string()),
     ];
 
     let query = input.to_lowercase();
-    if "/resume".starts_with(&query) || query.starts_with("/resume") {
+    let query_word = query.split_whitespace().next().unwrap_or("");
+    if query_word.is_empty() || !query_word.starts_with('/') {
+        return Vec::new();
+    }
+
+    if query_word.starts_with("/p") {
+        commands.push((
+            "/purge".to_string(),
+            "delete the last user/assistant turn from active history, session file, and memory"
+                .to_string(),
+        ));
+    }
+    if query_word.starts_with("/q") {
+        commands.push(("/quit".to_string(), "exit the REPL session".to_string()));
+    }
+
+    // Dynamic completions for /use
+    if query_word == "/use" {
+        let rest = if input.len() > 4 {
+            &input[4..].trim_start()
+        } else {
+            ""
+        };
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.is_empty() || (parts.len() == 1 && !rest.ends_with(' ')) {
+            let prefix = parts.first().unwrap_or(&"").to_lowercase();
+            let mut matches = Vec::new();
+            for p in &config.providers {
+                if p.name.to_lowercase().starts_with(&prefix) {
+                    matches.push((
+                        format!("/use {}", p.name),
+                        format!("switch active provider to '{}'", p.name),
+                    ));
+                }
+            }
+            if "auto".starts_with(&prefix) {
+                matches.push((
+                    "/use auto".to_string(),
+                    "switch active provider to auto".to_string(),
+                ));
+            }
+            return matches;
+        } else {
+            let provider_name = parts[0];
+            let model_prefix = if parts.len() > 1 {
+                parts[1].to_lowercase()
+            } else {
+                "".to_string()
+            };
+            let mut models = vec![
+                "gemini-3.5-flash".to_string(),
+                "gemini-3.1-flash-lite".to_string(),
+                "gemini-3.5-pro".to_string(),
+                "gpt-4o".to_string(),
+                "gpt-4o-mini".to_string(),
+                "o3-mini".to_string(),
+                "claude-3-5-sonnet-latest".to_string(),
+                "claude-3-5-haiku-latest".to_string(),
+                "deepseek-chat".to_string(),
+                "deepseek-reasoner".to_string(),
+            ];
+            if config
+                .providers
+                .iter()
+                .any(|p| p.name.eq_ignore_ascii_case(provider_name))
+            {
+                models.insert(0, config.active_model.clone());
+            }
+            models.dedup();
+            let mut matches = Vec::new();
+            for m in models {
+                if m.to_lowercase().starts_with(&model_prefix) {
+                    matches.push((
+                        format!("/use {} {}", provider_name, m),
+                        format!("select model '{}' on provider '{}'", m, provider_name),
+                    ));
+                }
+            }
+            return matches;
+        }
+    }
+
+    if query_word.starts_with("/re") {
         let sessions = crate::core::persistence::list_sessions().unwrap_or_default();
-        for s in sessions.iter().take(3) {
-            commands.push((
-                format!("/resume {}", s.id),
-                format!(
-                    "resume session from {}",
-                    s.modified_at.format("%Y-%m-%d %H:%M")
-                ),
-            ));
+        let mut matches = Vec::new();
+        let rest = if input.len() > 7 {
+            &input[7..].trim_start()
+        } else {
+            ""
+        };
+        let mut count = 0;
+        for s in sessions.iter() {
+            if s.id.starts_with(rest) {
+                matches.push((
+                    format!("/resume {}", s.id),
+                    format!(
+                        "resume session from {}",
+                        s.modified_at.format("%Y-%m-%d %H:%M")
+                    ),
+                ));
+                count += 1;
+                if count >= 5 {
+                    break;
+                }
+            }
+        }
+        if !matches.is_empty() {
+            return matches;
         }
     }
 
@@ -163,7 +325,9 @@ fn get_matching_commands_inline(input: &str) -> Vec<(String, String)> {
         .into_iter()
         .filter(|(cmd, _)| {
             let cmd_clean = cmd.split_whitespace().next().unwrap_or("");
-            query == "/" || cmd_clean.starts_with(&query) || query.starts_with(cmd_clean)
+            query_word == "/"
+                || cmd_clean.starts_with(query_word)
+                || query_word.starts_with(cmd_clean)
         })
         .collect()
 }
@@ -172,7 +336,10 @@ fn render_suggestions_inline(
     input: &str,
     selected_index: Option<usize>,
     prev_suggestions_printed: &mut bool,
+    prompt_width: usize,
+    config: &config::AppConfig,
 ) -> io::Result<()> {
+    // Clear from cursor position to end of screen (clears old suggestions)
     print!("\x1b[J");
     *prev_suggestions_printed = false;
 
@@ -180,17 +347,17 @@ fn render_suggestions_inline(
         return Ok(());
     }
 
-    let matches = get_matching_commands_inline(input);
+    let matches = get_matching_commands_inline(input, config);
     if matches.is_empty() {
         return Ok(());
     }
 
-    print!("\x1b[s");
-
+    // Print suggestions
     print!("\r\n");
     print!(
-        "  {}\r\n",
-        style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold()
+        "  {} {}\r\n",
+        style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold(),
+        style("(use ↑/↓ keys to scroll, Enter/Tab to select)").dimmed()
     );
     print!("  {}\r\n", style("─".repeat(50)).dimmed());
     for (i, (cmd, desc)) in matches.iter().enumerate() {
@@ -212,7 +379,16 @@ fn render_suggestions_inline(
         }
     }
 
-    print!("\x1b[u");
+    // Move cursor back up to the input line
+    let lines_to_move_up = 3 + matches.len();
+    print!("\x1b[{}A", lines_to_move_up);
+    // Carriage return to column 0
+    print!("\r");
+    // Move cursor right to prompt + input length
+    let col = prompt_width + input.len();
+    if col > 0 {
+        print!("\x1b[{}C", col);
+    }
     io::stdout().flush()?;
     *prev_suggestions_printed = true;
 
@@ -243,11 +419,14 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
 
     let data_dir = config::get_data_dir()?;
     let skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
-    let active_skills = skill_reg.list_skills();
+    let registered_skills = skill_reg.list_skills();
     let session = persistence::Session::new(resume_id.as_deref())?;
     let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
     let mut tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
-    let mut _mcp_registry = init_mcp_tools(&mut tools).await?;
+
+    // Initialize MCP tools without automatically registering them into the active tool registry
+    let (mut _mcp_registry, mcp_tools) = init_mcp_tools().await?;
+
     let mcp_config_path = std::path::Path::new("mcp_config.json");
     let user_mcp_config_path = config::get_config_dir()?.join("mcp_config.json");
     let active_mcp_path = if mcp_config_path.exists() {
@@ -259,6 +438,61 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         .metadata()
         .ok()
         .and_then(|m| m.modified().ok());
+
+    // Load available skills
+    let mut all_skills = std::collections::HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(data_dir.join("skills")) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
+            if path.is_file() && matches!(ext, "txt" | "md") {
+                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        all_skills.insert(name.to_string(), content);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut all_mcp_map = std::collections::HashMap::new();
+    let mut registered_mcps = Vec::new();
+    for t in mcp_tools {
+        let name = t.name.clone();
+        registered_mcps.push(name.clone());
+        all_mcp_map.insert(
+            name,
+            std::sync::Arc::new(t) as std::sync::Arc<dyn crate::tools::Tool>,
+        );
+    }
+    registered_mcps.sort();
+
+    let dynamic_state =
+        std::sync::Arc::new(std::sync::Mutex::new(crate::tools::DynamicRegistryState {
+            all_mcp_tools: all_mcp_map,
+            all_skills,
+            active_tools: std::collections::HashSet::new(),
+            active_skills: std::collections::HashSet::new(),
+            changed: false,
+        }));
+
+    // Register dynamic loader tools into tools
+    tools.register(
+        crate::tools::builtins::ListAvailableToolsAndSkillsTool::new(dynamic_state.clone()),
+    );
+    tools.register(crate::tools::builtins::LoadToolOrSkillTool::new(
+        dynamic_state.clone(),
+    ));
+    tools.register(crate::tools::builtins::UnloadToolOrSkillTool::new(
+        dynamic_state.clone(),
+    ));
+
+    // Store core tools copy for Engine
+    let mut core_tools = std::collections::HashMap::new();
+    for (name, tool) in &tools.tools {
+        core_tools.insert(name.clone(), tool.clone());
+    }
+
     let memory_dir = data_dir.join("memory");
     let memory_engine = memory::HelixMemoryEngine::new(&memory_dir)?;
 
@@ -269,9 +503,9 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         1. DO NOT USE MARKDOWN TABLES (e.g. '| Header | Header |') because they get severely mangled and wrapped when displayed inside the terminal's narrow fixed-width box layout (typically 80-110 characters). Instead, represent tabular data using nested bullet points, bold key-value listings, or record blocks (e.g. '◆ Record 1:\n  * Key: Value').\n\
         2. Keep horizontal lines and separators short. DO NOT output long horizontal line dashes like '------------------------------' or ASCII art. Keep horizontal dividers short, e.g., '---'.\n\
         3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.\n\
-        4. DO NOT try to scrape search engines, media sites, or streaming/video sites (like YouTube, Google, etc.) using the 'web_fetch' tool. These sites block simple automated requests with CAPTCHAs or 403 Forbidden errors. Instead, suggest search options or search queries to the user, or rely on existing knowledge.";
+        4. When you need up-to-date facts, current news, search results, or information beyond your training cutoff (e.g. recent events, sports scores, or future events like the 2026 World Cup), you MUST use the 'web_search' tool FIRST. Do not guess, make up, or hallucinate details. Use 'web_search' to find search results, and then use 'web_fetch' on specific result URLs if you need to read the full page content.";
 
-    let system_prompt = build_system_prompt(base_system, &skill_reg);
+    let system_prompt = base_system.to_string();
 
     // Shared HTTP client for model info lookups (separate from the inference client)
     let lookup_client = model_registry_build_lookup_client();
@@ -279,7 +513,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
     // Dynamically resolve context window from provider APIs / OpenRouter catalogue
     let context = build_context(
         &app_config,
-        &system_prompt,
+        base_system,
         &tools.descriptors(),
         &lookup_client,
     )
@@ -294,7 +528,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
     let sona_engine = ruvector_sona::SonaEngine::with_config(sona_config);
     load_sona_state(&data_dir, &sona_engine);
 
-    let mut engine = engine::Engine::new(model, context, tools, session)
+    let mut engine = engine::Engine::new(model, context, tools, session, core_tools, dynamic_state)
         .with_memory(memory_engine)
         .with_sona(sona_engine);
 
@@ -314,6 +548,15 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                 ))
                                 .green()
                             );
+                            if !engine.global_messages.is_empty() {
+                                println!();
+                                for msg in &engine.global_messages {
+                                    let role = msg["role"].as_str().unwrap_or("user");
+                                    let content = msg["content"].as_str().unwrap_or("");
+                                    print_message(role, content);
+                                    println!();
+                                }
+                            }
                         }
                         Err(e) => println!(
                             "{}",
@@ -352,7 +595,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         memory_size,
         patterns_count,
         engine.context.budget.model_window,
-        &active_skills,
+        &registered_skills,
+        &registered_mcps,
     );
 
     // Enable bracketed paste mode
@@ -380,6 +624,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         let mut input = String::new();
         let mut prev_suggestions_printed = false;
         let mut selected_index: Option<usize> = None;
+        let prompt_width = 18 + format!("{:.1}%", pct).len();
 
         print!(
             "\n{} {} {} {} ",
@@ -456,6 +701,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 &input,
                                                 selected_index,
                                                 &mut prev_suggestions_printed,
+                                                prompt_width,
+                                                &app_config,
                                             )?;
                                         }
                                     }
@@ -482,6 +729,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                         &input,
                                         selected_index,
                                         &mut prev_suggestions_printed,
+                                        prompt_width,
+                                        &app_config,
                                     )?;
                                 }
                                 crossterm::event::KeyCode::Backspace => {
@@ -494,12 +743,15 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                             &input,
                                             selected_index,
                                             &mut prev_suggestions_printed,
+                                            prompt_width,
+                                            &app_config,
                                         )?;
                                     }
                                 }
                                 crossterm::event::KeyCode::Down => {
                                     if prev_suggestions_printed {
-                                        let matches = get_matching_commands_inline(&input);
+                                        let matches =
+                                            get_matching_commands_inline(&input, &app_config);
                                         if !matches.is_empty() {
                                             let next_idx = match selected_index {
                                                 Some(idx) => (idx + 1) % matches.len(),
@@ -510,13 +762,16 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 &input,
                                                 selected_index,
                                                 &mut prev_suggestions_printed,
+                                                prompt_width,
+                                                &app_config,
                                             )?;
                                         }
                                     }
                                 }
                                 crossterm::event::KeyCode::Up => {
                                     if prev_suggestions_printed {
-                                        let matches = get_matching_commands_inline(&input);
+                                        let matches =
+                                            get_matching_commands_inline(&input, &app_config);
                                         if !matches.is_empty() {
                                             let next_idx = match selected_index {
                                                 Some(idx) => {
@@ -533,13 +788,16 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 &input,
                                                 selected_index,
                                                 &mut prev_suggestions_printed,
+                                                prompt_width,
+                                                &app_config,
                                             )?;
                                         }
                                     }
                                 }
                                 crossterm::event::KeyCode::Tab => {
                                     if input.starts_with('/') {
-                                        let matches = get_matching_commands_inline(&input);
+                                        let matches =
+                                            get_matching_commands_inline(&input, &app_config);
                                         if !matches.is_empty() {
                                             let idx = selected_index.unwrap_or(0);
                                             if idx < matches.len() {
@@ -562,6 +820,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                     &input,
                                                     selected_index,
                                                     &mut prev_suggestions_printed,
+                                                    prompt_width,
+                                                    &app_config,
                                                 )?;
                                             }
                                         }
@@ -570,7 +830,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                 crossterm::event::KeyCode::Enter => {
                                     if prev_suggestions_printed {
                                         if let Some(idx) = selected_index {
-                                            let matches = get_matching_commands_inline(&input);
+                                            let matches =
+                                                get_matching_commands_inline(&input, &app_config);
                                             if idx < matches.len() {
                                                 let chosen = &matches[idx].0;
                                                 for _ in 0..input.len() {
@@ -600,6 +861,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                             &input,
                             selected_index,
                             &mut prev_suggestions_printed,
+                            prompt_width,
+                            &app_config,
                         )?;
                     }
                     _ => {}
@@ -637,6 +900,39 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                 println!("{}", style("✔ Context cleared.").green());
                 continue;
             }
+            "/forget" | "/purge" => {
+                if let Some(user_idx) = engine
+                    .global_messages
+                    .iter()
+                    .rposition(|m| m["role"].as_str() == Some("user"))
+                {
+                    engine.global_messages.truncate(user_idx);
+                }
+
+                let session_res = engine.session.forget_last_turn();
+
+                let memory_res = if let Some(ref mut memory_engine) = engine.memory
+                    && let Ok(workspace_dir) = std::env::current_dir()
+                {
+                    let workspace_str = workspace_dir.to_string_lossy().to_string();
+                    memory_engine.delete_last_memory(&workspace_str)
+                } else {
+                    Ok(false)
+                };
+
+                let msg = match (session_res, memory_res) {
+                    (Ok(true), Ok(true)) => {
+                        "✔ Last turn removed from active history, session file, and semantic memory database."
+                    }
+                    (Ok(true), _) => "✔ Last turn removed from active history and session file.",
+                    (_, Ok(true)) => {
+                        "✔ Last turn removed from active history and semantic memory database."
+                    }
+                    _ => "✔ Last turn removed from active history.",
+                };
+                println!("{}", style(msg).green());
+                continue;
+            }
             "/optimize" | "/learn" => {
                 if let Some(ref sona) = engine.sona {
                     println!(
@@ -659,12 +955,18 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             }
             "/status" => {
                 let memory_size = engine.memory.as_ref().map(|m| m.size()).unwrap_or(0);
+                let active_skills_list = {
+                    let state = engine.dynamic_registry.lock().unwrap();
+                    let mut list = state.active_skills.iter().cloned().collect::<Vec<_>>();
+                    list.sort();
+                    list
+                };
                 print_status_card(
                     &engine.session.id,
                     engine.model.model_name(),
                     memory_size,
                     engine.sona.as_deref(),
-                    &active_skills,
+                    &active_skills_list,
                     true,
                 );
 
@@ -1149,6 +1451,15 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                     ))
                                     .green()
                                 );
+                                if !engine.global_messages.is_empty() {
+                                    println!();
+                                    for msg in &engine.global_messages {
+                                        let role = msg["role"].as_str().unwrap_or("user");
+                                        let content = msg["content"].as_str().unwrap_or("");
+                                        print_message(role, content);
+                                        println!();
+                                    }
+                                }
                             }
                             Err(e) => println!("{}", style(format!("✘ {}", e)).red()),
                         }
@@ -1174,9 +1485,33 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             if arg.is_empty() {
                 let current = app_config.thinking_level.as_deref().unwrap_or("default");
                 println!(
-                    "{}",
-                    style(format!("Current thinking level: {}", current)).cyan()
+                    "\n  {}\n  {}",
+                    style("REASONING EFFORT & THINKING BUDGET").bold().cyan(),
+                    style("─".repeat(50)).color256(240)
                 );
+                println!(
+                    "  Current thinking level: {}",
+                    style(current).green().bold()
+                );
+                println!("\n  Usage:");
+                println!("    {} {}", "/thinking".yellow(), "<level>".cyan());
+                println!("\n  Available Levels:");
+                println!(
+                    "    {:22}  {}",
+                    style("low, medium, high").cyan(),
+                    "qualitative reasoning effort (OpenAI o1/o3-mini)"
+                );
+                println!(
+                    "    {:22}  {}",
+                    style("<integer> (e.g. 2048)").cyan(),
+                    "exact thinking token budget (Claude 3.7 / DeepSeek R1)"
+                );
+                println!(
+                    "    {:22}  {}",
+                    style("off, disabled").cyan(),
+                    "turn off thinking block to save cost & latency"
+                );
+                println!();
             } else {
                 let level = match arg.to_lowercase().as_str() {
                     "low" | "medium" | "high" | "off" | "disabled" => {
@@ -1216,7 +1551,7 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         }
 
         if trimmed.starts_with('/') {
-            let matches = get_matching_commands_inline(trimmed);
+            let matches = get_matching_commands_inline(trimmed, &app_config);
             if trimmed != "/" {
                 println!(
                     "\n  {} {}",
@@ -1313,7 +1648,13 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                     spinner_suffix = token.strip_prefix("\x1b[S").unwrap_or("thinking...").to_string();
                                 } else if token.starts_with("\x1b[T") {
                                     let msg = token.strip_prefix("\x1b[T").unwrap_or("").to_string();
-                                    telemetry_messages.push(msg);
+                                    if !stream_tracker.started {
+                                        print!("\r\x1B[K");
+                                        println!("{}", msg);
+                                        io::stdout().flush().ok();
+                                    } else {
+                                        telemetry_messages.push(msg);
+                                    }
                                 } else {
                                     if show_spinner {
                                         print!("\r\x1B[K");
@@ -1356,7 +1697,13 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                 .unwrap_or(24);
             let is_short_enough = stream_tracker.printed_lines < term_height.saturating_sub(4);
 
-            if stream_tracker.printed_lines > 0 && is_short_enough {
+            if full_response.trim().is_empty() {
+                if stream_tracker.printed_lines > 0 {
+                    print!("\x1B[{}A", stream_tracker.printed_lines);
+                    print!("\x1B[J");
+                    io::stdout().flush().ok();
+                }
+            } else if stream_tracker.printed_lines > 0 && is_short_enough {
                 // Erase the live-streamed text box to replace it with formatted markdown
                 print!("\x1B[{}A", stream_tracker.printed_lines);
                 print!("\x1B[J");
@@ -1464,11 +1811,29 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
 
         if current_mcp_modified != last_mcp_modified {
             println!("\n🔄 [MCP] Detected changes in mcp_config.json. Scheduling safe reload...");
-            let mut new_tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
-            match init_mcp_tools(&mut new_tools).await {
-                Ok(new_mcp_registry) => {
+            match init_mcp_tools().await {
+                Ok((new_mcp_registry, mcp_tools)) => {
                     _mcp_registry = new_mcp_registry; // Drops the old registry and kills old processes
-                    engine.update_tools(new_tools);
+
+                    let mut all_mcp_map = std::collections::HashMap::new();
+                    for t in mcp_tools {
+                        all_mcp_map.insert(
+                            t.name.clone(),
+                            std::sync::Arc::new(t) as std::sync::Arc<dyn crate::tools::Tool>,
+                        );
+                    }
+
+                    // Update state
+                    {
+                        let mut state = engine.dynamic_registry.lock().unwrap();
+                        state.all_mcp_tools = all_mcp_map;
+                        // Clean up any active tools that no longer exist
+                        let keys: std::collections::HashSet<String> =
+                            state.all_mcp_tools.keys().cloned().collect();
+                        state.active_tools.retain(|name| keys.contains(name));
+                        state.changed = true;
+                    }
+
                     last_mcp_modified = current_mcp_modified;
                     println!("✔ [MCP] Configuration reloaded and tools updated successfully!");
                 }
@@ -1757,9 +2122,15 @@ async fn generate_and_save_reflection(engine: &mut engine::Engine) {
         - **Errors & Blockers Resolved**: [Bullet list of issues encountered and how they were solved]\n\
         - **Key Context Patterns**: [Bullet list of architectural or path conventions discovered]";
 
+    let mut reflection_messages = engine.global_messages.clone();
+    reflection_messages.push(serde_json::json!({
+        "role": "user",
+        "content": "The session has ended. Please generate the structured session reflection summary now based on the programming session history."
+    }));
+
     match engine
         .model
-        .call(post_mortem_prompt, &engine.global_messages, vec![], None)
+        .call(post_mortem_prompt, &reflection_messages, vec![], None)
         .await
     {
         Ok(model_response) => {
@@ -1829,8 +2200,14 @@ async fn generate_and_save_reflection_bg(
         - **Errors & Blockers Resolved**: [Bullet list of issues encountered and how they were solved]\n\
         - **Key Context Patterns**: [Bullet list of architectural or path conventions discovered]";
 
+    let mut reflection_messages = global_messages.clone();
+    reflection_messages.push(serde_json::json!({
+        "role": "user",
+        "content": "The session has ended. Please generate the structured session reflection summary now based on the programming session history."
+    }));
+
     match model
-        .call(post_mortem_prompt, &global_messages, vec![], None)
+        .call(post_mortem_prompt, &reflection_messages, vec![], None)
         .await
     {
         Ok(model_response) => {

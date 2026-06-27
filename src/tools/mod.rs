@@ -51,7 +51,7 @@ pub trait Tool: Send + Sync {
 /// Uses `Arc<dyn Tool>` so individual tools can be cloned into
 /// parallel `tokio::spawn` tasks without copying.
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    pub tools: HashMap<String, Arc<dyn Tool>>,
 }
 
 impl ToolRegistry {
@@ -64,6 +64,10 @@ impl ToolRegistry {
     pub fn register(&mut self, tool: impl Tool + 'static) {
         let t: Arc<dyn Tool> = Arc::new(tool);
         self.tools.insert(t.name().to_string(), t);
+    }
+
+    pub fn register_arc(&mut self, tool: Arc<dyn Tool>) {
+        self.tools.insert(tool.name().to_string(), tool);
     }
 
     pub fn descriptors(&self) -> Vec<ToolDescriptor> {
@@ -100,3 +104,13 @@ impl Default for ToolRegistry {
         Self::new()
     }
 }
+
+pub struct DynamicRegistryState {
+    pub all_mcp_tools: HashMap<String, Arc<dyn Tool>>,
+    pub all_skills: HashMap<String, String>, // name -> content
+    pub active_tools: std::collections::HashSet<String>,
+    pub active_skills: std::collections::HashSet<String>,
+    pub changed: bool,
+}
+
+pub type SharedRegistryState = Arc<std::sync::Mutex<DynamicRegistryState>>;

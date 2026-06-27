@@ -189,7 +189,7 @@ pub async fn check_provider_health(client: &Client, provider: &Provider) -> bool
     };
     let mut req = client
         .get(&url)
-        .timeout(std::time::Duration::from_millis(800));
+        .timeout(std::time::Duration::from_millis(5000));
     if let Some(key) = &provider.api_key {
         req = req.bearer_auth(key);
     }
