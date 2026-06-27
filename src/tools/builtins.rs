@@ -917,6 +917,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_web_search_tool() {
+        if std::env::var("CI").is_ok() {
+            println!(
+                "Skipping web search test in CI environment to avoid rate-limiting/network blocks."
+            );
+            return;
+        }
+
         let tool = WebSearchTool::new();
         let res = tool
             .call(json!({
