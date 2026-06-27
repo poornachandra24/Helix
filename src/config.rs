@@ -375,78 +375,6 @@ fn validate_provider_connectivity(provider: &Provider) {
 }
 
 pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
-    let selections: Vec<String> = PROVIDER_TEMPLATES.iter().map(|p| p.0.to_string()).collect();
-
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Choose a Provider Template")
-        .default(0)
-        .items(&selections)
-        .interact()?;
-
-    let (name, default_url, needs_key, default_model, format) = &PROVIDER_TEMPLATES[selection];
-    let name = name.to_string();
-
-    let base_url: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Base URL")
-        .default(default_url.to_string())
-        .interact_text()?;
-
-    let env_var_name = match name.as_str() {
-        "OpenAI" => Some("OPENAI_API_KEY"),
-        "OpenRouter" => Some("OPENROUTER_API_KEY"),
-        "DeepSeek" => Some("DEEPSEEK_API_KEY"),
-        "Groq" => Some("GROQ_API_KEY"),
-        "Gemini" => Some("GEMINI_API_KEY"),
-        "Ollama Cloud" => Some("OLLAMA_API_KEY"),
-        _ => None,
-    };
-
-    let api_key = if *needs_key {
-        let mut key_val = None;
-        if let Some(env_var) = env_var_name {
-            let env_val = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty());
-            if let Some(val) = env_val {
-                let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt(format!("Detected API key in env ({}). Use it?", env_var))
-                    .default(true)
-                    .interact()?;
-                if confirm {
-                    key_val = Some(val);
-                }
-            }
-        }
-
-        if key_val.is_none() {
-            let key: String = Password::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("API Key for {}", name))
-                .interact()?;
-            key_val = Some(key);
-        }
-        key_val
-    } else {
-        let key: String = Password::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!("API Key for {} (Enter to skip)", name))
-            .allow_empty_password(true)
-            .interact()?;
-        if key.trim().is_empty() {
-            None
-        } else {
-            Some(key)
-        }
-    };
-
-    let model_name: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Model Name")
-        .default(default_model.to_string())
-        .interact_text()?;
-
-    let provider = Provider {
-        name: name.clone(),
-        base_url,
-        api_key,
-        api_format: format.clone(),
-    };
-
     let mut config = existing.unwrap_or_else(|| AppConfig {
         providers: vec![],
         active_provider: String::new(),
@@ -457,14 +385,355 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
         thinking_level: None,
     });
 
-    config.providers.retain(|p| p.name != provider.name);
-    config.providers.push(provider.clone());
-    config.active_provider = provider.name.clone();
-    config.active_model = model_name;
+    loop {
+        let main_menu = vec![
+            format!(
+                "Edit active provider: {} ({})",
+                config.active_provider, config.active_model
+            ),
+            "Add / Configure a new provider from template".to_string(),
+            format!(
+                "Change sandbox execution mode (currently: {:?})",
+                config.sandbox_mode
+            ),
+            format!(
+                "Change thinking level (currently: {})",
+                config.thinking_level.as_deref().unwrap_or("not set")
+            ),
+            format!(
+                "Change context window override (currently: {})",
+                config
+                    .context_window_override
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+            format!(
+                "Change response headroom (currently: {})",
+                config
+                    .response_headroom
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+            "Exit configuration".to_string(),
+        ];
 
-    config.save()?;
-    println!("\n✅ Configuration updated and saved!");
-    validate_provider_connectivity(&provider);
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Helix CLI Configuration Menu")
+            .default(0)
+            .items(&main_menu)
+            .interact()?;
+
+        match choice {
+            0 => {
+                let active_p_name = config.active_provider.clone();
+                let existing_provider = config
+                    .providers
+                    .iter()
+                    .find(|p| p.name == active_p_name)
+                    .cloned();
+                if let Some(mut ep) = existing_provider {
+                    let base_url: String = Input::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Base URL (type 'back' to cancel)")
+                        .default(ep.base_url.clone())
+                        .interact_text()?;
+                    if base_url.trim().eq_ignore_ascii_case("back") {
+                        continue;
+                    }
+
+                    let api_key = if let Some(ref current_key) = ep.api_key {
+                        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                            .with_prompt("Keep existing API Key?")
+                            .default(true)
+                            .interact()?;
+                        if confirm {
+                            Some(current_key.clone())
+                        } else {
+                            let key: String = Password::with_theme(&ColorfulTheme::default())
+                                .with_prompt("New API Key (Enter to skip)")
+                                .allow_empty_password(true)
+                                .interact()?;
+                            if key.trim().is_empty() {
+                                None
+                            } else {
+                                Some(key)
+                            }
+                        }
+                    } else {
+                        let key: String = Password::with_theme(&ColorfulTheme::default())
+                            .with_prompt("API Key (Enter to skip)")
+                            .allow_empty_password(true)
+                            .interact()?;
+                        if key.trim().is_empty() {
+                            None
+                        } else {
+                            Some(key)
+                        }
+                    };
+
+                    let model_name: String = Input::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Model Name (type 'back' to cancel)")
+                        .default(config.active_model.clone())
+                        .interact_text()?;
+                    if model_name.trim().eq_ignore_ascii_case("back") {
+                        continue;
+                    }
+
+                    ep.base_url = base_url;
+                    ep.api_key = api_key;
+                    config.active_model = model_name;
+
+                    config.providers.retain(|p| p.name != ep.name);
+                    config.providers.push(ep.clone());
+                    config.save()?;
+                    println!("\nConfiguration updated and saved!");
+                    validate_provider_connectivity(&ep);
+                } else {
+                    println!("No active provider configured yet.");
+                }
+            }
+            1 => {
+                let mut selections: Vec<String> =
+                    PROVIDER_TEMPLATES.iter().map(|p| p.0.to_string()).collect();
+                selections.push("< Back to main menu".to_string());
+
+                let selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Choose a Provider Template")
+                    .default(0)
+                    .items(&selections)
+                    .interact()?;
+
+                if selection == PROVIDER_TEMPLATES.len() {
+                    continue;
+                }
+
+                let (name, default_url, needs_key, default_model, format) =
+                    &PROVIDER_TEMPLATES[selection];
+                let name = name.to_string();
+
+                let matching_provider = config.providers.iter().find(|p| p.name == name);
+                let prepop_url = matching_provider
+                    .map(|p| p.base_url.clone())
+                    .unwrap_or_else(|| default_url.to_string());
+                let prepop_model = matching_provider
+                    .map(|_| config.active_model.clone())
+                    .unwrap_or_else(|| default_model.to_string());
+
+                let base_url: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Base URL (type 'back' to cancel)")
+                    .default(prepop_url)
+                    .interact_text()?;
+                if base_url.trim().eq_ignore_ascii_case("back") {
+                    continue;
+                }
+
+                let env_var_name = match name.as_str() {
+                    "OpenAI" => Some("OPENAI_API_KEY"),
+                    "OpenRouter" => Some("OPENROUTER_API_KEY"),
+                    "DeepSeek" => Some("DEEPSEEK_API_KEY"),
+                    "Groq" => Some("GROQ_API_KEY"),
+                    "Gemini" => Some("GEMINI_API_KEY"),
+                    "Ollama Cloud" => Some("OLLAMA_API_KEY"),
+                    _ => None,
+                };
+
+                let api_key = if *needs_key {
+                    let mut key_val = None;
+                    if let Some(env_var) = env_var_name {
+                        let env_val = std::env::var(env_var).ok().filter(|v| !v.trim().is_empty());
+                        if let Some(val) = env_val {
+                            let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                                .with_prompt(format!(
+                                    "Detected API key in env ({}). Use it?",
+                                    env_var
+                                ))
+                                .default(true)
+                                .interact()?;
+                            if confirm {
+                                key_val = Some(val);
+                            }
+                        }
+                    }
+
+                    if key_val.is_none() {
+                        if let Some(k) = matching_provider.and_then(|p| p.api_key.as_ref()) {
+                            let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                                .with_prompt("Reuse existing API key for this provider?")
+                                .default(true)
+                                .interact()?;
+                            if confirm {
+                                key_val = Some(k.clone());
+                            }
+                        }
+                        if key_val.is_none() {
+                            let key: String = Password::with_theme(&ColorfulTheme::default())
+                                .with_prompt(format!("API Key for {}", name))
+                                .interact()?;
+                            key_val = Some(key);
+                        }
+                    }
+                    key_val
+                } else {
+                    let key: String = Password::with_theme(&ColorfulTheme::default())
+                        .with_prompt(format!("API Key for {} (Enter to skip)", name))
+                        .allow_empty_password(true)
+                        .interact()?;
+                    if key.trim().is_empty() {
+                        None
+                    } else {
+                        Some(key)
+                    }
+                };
+
+                let model_name: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Model Name (type 'back' to cancel)")
+                    .default(prepop_model)
+                    .interact_text()?;
+                if model_name.trim().eq_ignore_ascii_case("back") {
+                    continue;
+                }
+
+                let provider = Provider {
+                    name: name.clone(),
+                    base_url,
+                    api_key,
+                    api_format: format.clone(),
+                };
+
+                config.providers.retain(|p| p.name != provider.name);
+                config.providers.push(provider.clone());
+                config.active_provider = provider.name.clone();
+                config.active_model = model_name;
+
+                config.save()?;
+                println!("\nConfiguration updated and saved!");
+                validate_provider_connectivity(&provider);
+            }
+            2 => {
+                let modes = vec!["local", "docker", "wasm", "ssh", "< Back to main menu"];
+                let default_sel = match config.sandbox_mode {
+                    SandboxMode::Local => 0,
+                    SandboxMode::Docker => 1,
+                    SandboxMode::Wasm => 2,
+                    SandboxMode::SSH => 3,
+                };
+                let selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select Sandbox Execution Mode")
+                    .default(default_sel)
+                    .items(&modes)
+                    .interact()?;
+                if selection == 4 {
+                    continue;
+                }
+                config.sandbox_mode = match selection {
+                    0 => SandboxMode::Local,
+                    1 => SandboxMode::Docker,
+                    2 => SandboxMode::Wasm,
+                    _ => SandboxMode::SSH,
+                };
+                config.save()?;
+                println!("\nSandbox mode updated to {:?}", config.sandbox_mode);
+            }
+            3 => {
+                let levels = vec![
+                    "off",
+                    "low",
+                    "medium",
+                    "high",
+                    "Custom (enter budget)",
+                    "< Back to main menu",
+                ];
+                let default_sel = match config.thinking_level.as_deref().unwrap_or("off") {
+                    "off" | "disabled" => 0,
+                    "low" => 1,
+                    "medium" => 2,
+                    "high" => 3,
+                    _ => 4,
+                };
+                let selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Select model reasoning effort / thinking budget")
+                    .default(default_sel)
+                    .items(&levels)
+                    .interact()?;
+                if selection == 5 {
+                    continue;
+                }
+
+                let val = match selection {
+                    0 => Some("off".to_string()),
+                    1 => Some("low".to_string()),
+                    2 => Some("medium".to_string()),
+                    3 => Some("high".to_string()),
+                    _ => {
+                        let budget: String = Input::with_theme(&ColorfulTheme::default())
+                            .with_prompt("Enter custom token budget (type 'back' to cancel)")
+                            .interact_text()?;
+                        if budget.trim().eq_ignore_ascii_case("back") {
+                            continue;
+                        }
+                        Some(budget)
+                    }
+                };
+                config.thinking_level = val;
+                config.save()?;
+                println!("\nThinking level updated to {:?}", config.thinking_level);
+            }
+            4 => {
+                let current = config
+                    .context_window_override
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
+                let val_str: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt(
+                        "Enter context window override in tokens (Enter to clear, type 'back' to cancel)",
+                    )
+                    .default(current)
+                    .allow_empty(true)
+                    .interact_text()?;
+                if val_str.trim().eq_ignore_ascii_case("back") {
+                    continue;
+                }
+
+                let val = if val_str.trim().is_empty() {
+                    None
+                } else {
+                    val_str.trim().parse::<usize>().ok()
+                };
+                config.context_window_override = val;
+                config.save()?;
+                println!("\nContext window override updated!");
+            }
+            5 => {
+                let current = config
+                    .response_headroom
+                    .map(|c| c.to_string())
+                    .unwrap_or_default();
+                let val_str: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt(
+                        "Enter response headroom in tokens (Enter to clear, type 'back' to cancel)",
+                    )
+                    .default(current)
+                    .allow_empty(true)
+                    .interact_text()?;
+                if val_str.trim().eq_ignore_ascii_case("back") {
+                    continue;
+                }
+
+                let val = if val_str.trim().is_empty() {
+                    None
+                } else {
+                    val_str.trim().parse::<usize>().ok()
+                };
+                config.response_headroom = val;
+                config.save()?;
+                println!("\nResponse headroom updated!");
+            }
+            _ => {
+                println!("Exiting configuration menu.");
+                break;
+            }
+        }
+    }
+
     Ok(config)
 }
 

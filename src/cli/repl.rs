@@ -22,6 +22,103 @@ use super::helpers::{
     init_mcp_tools, load_sona_state, print_banner, print_status_card, save_sona_state, wrap_text,
 };
 
+static PROVIDER_MODELS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, Vec<String>>>,
+> = std::sync::OnceLock::new();
+
+fn get_cached_models(provider_name: &str) -> Vec<String> {
+    if let Some(lock) = PROVIDER_MODELS.get() {
+        if let Ok(map) = lock.read() {
+            for (p_name, models) in map.iter() {
+                if p_name.eq_ignore_ascii_case(provider_name) {
+                    return models.clone();
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn populate_model_cache(config: &config::AppConfig) {
+    let _lock =
+        PROVIDER_MODELS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    let client = reqwest::Client::new();
+
+    for provider in &config.providers {
+        let provider = provider.clone();
+        let client = client.clone();
+        tokio::spawn(async move {
+            let mut models = Vec::new();
+            let base = provider.base_url.trim_end_matches('/');
+            match provider.api_format {
+                config::ApiFormat::OllamaNative => {
+                    let url = if base.ends_with("/api/tags") {
+                        base.to_string()
+                    } else if base.ends_with("/api") {
+                        format!("{}/tags", base)
+                    } else {
+                        format!("{}/api/tags", base)
+                    };
+                    let mut req = client
+                        .get(&url)
+                        .timeout(std::time::Duration::from_millis(3000));
+                    if let Some(key) = &provider.api_key {
+                        req = req.bearer_auth(key);
+                    }
+                    if let Ok(resp) = req.send().await {
+                        if resp.status().is_success() {
+                            if let Ok(val) = resp.json::<serde_json::Value>().await {
+                                if let Some(arr) = val["models"].as_array() {
+                                    for m in arr {
+                                        if let Some(name) = m["name"].as_str() {
+                                            models.push(name.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                config::ApiFormat::OpenAiCompatible => {
+                    let url = if base.ends_with("/models") {
+                        base.to_string()
+                    } else {
+                        format!("{}/models", base)
+                    };
+                    let mut req = client
+                        .get(&url)
+                        .timeout(std::time::Duration::from_millis(3000));
+                    if let Some(key) = &provider.api_key {
+                        req = req.bearer_auth(key);
+                    }
+                    if let Ok(resp) = req.send().await {
+                        if resp.status().is_success() {
+                            if let Ok(val) = resp.json::<serde_json::Value>().await {
+                                if let Some(arr) = val["data"].as_array() {
+                                    for m in arr {
+                                        if let Some(id) = m["id"].as_str() {
+                                            models.push(id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !models.is_empty() {
+                models.sort();
+                if let Some(lock) = PROVIDER_MODELS.get() {
+                    if let Ok(mut map) = lock.write() {
+                        map.insert(provider.name.clone(), models);
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// Returns the usable content width for boxed output, re-queried live so
 /// resizing the terminal mid-session is automatically reflected next turn.
 #[inline]
@@ -259,18 +356,21 @@ fn get_matching_commands_inline(input: &str, config: &config::AppConfig) -> Vec<
             } else {
                 "".to_string()
             };
-            let mut models = vec![
-                "gemini-3.5-flash".to_string(),
-                "gemini-3.1-flash-lite".to_string(),
-                "gemini-3.5-pro".to_string(),
-                "gpt-4o".to_string(),
-                "gpt-4o-mini".to_string(),
-                "o3-mini".to_string(),
-                "claude-3-5-sonnet-latest".to_string(),
-                "claude-3-5-haiku-latest".to_string(),
-                "deepseek-chat".to_string(),
-                "deepseek-reasoner".to_string(),
-            ];
+            let mut models = get_cached_models(provider_name);
+            if models.is_empty() {
+                models = vec![
+                    "gemini-3.5-flash".to_string(),
+                    "gemini-3.1-flash-lite".to_string(),
+                    "gemini-3.5-pro".to_string(),
+                    "gpt-4o".to_string(),
+                    "gpt-4o-mini".to_string(),
+                    "o3-mini".to_string(),
+                    "claude-3-5-sonnet-latest".to_string(),
+                    "claude-3-5-haiku-latest".to_string(),
+                    "deepseek-chat".to_string(),
+                    "deepseek-reasoner".to_string(),
+                ];
+            }
             if config
                 .providers
                 .iter()
@@ -414,6 +514,7 @@ impl Drop for RawModeGuard {
 }
 
 pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<String>) -> Result<()> {
+    populate_model_cache(&app_config);
     // Banner is printed after engine is built so we can pass session/memory/SONA info
     let start_time = chrono::Local::now();
 
