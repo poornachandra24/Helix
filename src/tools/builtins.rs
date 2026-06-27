@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module, clippy::collapsible_if)]
+
 use crate::tools::Tool;
 use crate::tools::sandbox::{SandboxBackend, SandboxMode, SharedSandbox};
 use anyhow::Result;
@@ -476,6 +478,247 @@ impl Tool for WebFetchTool {
     }
 }
 
+// ──────────────────────────────────────────────
+// WebSearchTool
+// ──────────────────────────────────────────────
+
+pub struct WebSearchTool {
+    client: reqwest::Client,
+}
+
+impl WebSearchTool {
+    pub fn new() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::USER_AGENT, reqwest::header::HeaderValue::from_static(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ));
+        headers.insert(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_static(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        ));
+        headers.insert(
+            reqwest::header::ACCEPT_LANGUAGE,
+            reqwest::header::HeaderValue::from_static("en-US,en;q=0.9"),
+        );
+        headers.insert(
+            reqwest::header::REFERER,
+            reqwest::header::HeaderValue::from_static("https://duckduckgo.com/"),
+        );
+
+        Self {
+            client: reqwest::Client::builder()
+                .default_headers(headers)
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .expect("Failed to build HTTP client"),
+        }
+    }
+}
+
+impl Default for WebSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[allow(dead_code)]
+fn url_encode(s: &str) -> String {
+    let mut encoded = String::new();
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(b as char);
+            }
+            b' ' => {
+                encoded.push('+');
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    encoded
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(c1), Some(c2)) = (h1, h2) {
+                if let Ok(b) = u8::from_str_radix(&format!("{}{}", c1, c2), 16) {
+                    bytes.push(b);
+                    continue;
+                }
+            }
+        } else if c == '+' {
+            bytes.push(b' ');
+            continue;
+        }
+        bytes.push(c as u8);
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+#[async_trait]
+impl Tool for WebSearchTool {
+    fn name(&self) -> &str {
+        "web_search"
+    }
+    fn description(&self) -> &str {
+        "Search the web using DuckDuckGo for queries, news, or general information. Returns search result snippets and URLs."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "The search query" }
+            },
+            "required": ["query"]
+        })
+    }
+
+    async fn call(&self, args: Value) -> Result<String> {
+        let query = args["query"].as_str().context("'query' is required")?;
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("q", query);
+
+        let resp = self
+            .client
+            .post("https://html.duckduckgo.com/html/")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Search request failed for '{}': {}", query, e))?;
+
+        let status = resp.status();
+        let body = resp.text().await?;
+
+        if !status.is_success() {
+            return Ok(format!(
+                "HTTP {} when searching the web for '{}'",
+                status, query
+            ));
+        }
+
+        // Parse DDG HTML results
+        let mut results = Vec::new();
+        let mut search_str = body.as_str();
+
+        while let Some(start_idx) = search_str.find("result__body") {
+            search_str = &search_str[start_idx + 12..];
+
+            // Find result__title
+            let title_start = match search_str.find("result__title") {
+                Some(idx) => idx,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let sub_str = &search_str[title_start..];
+
+            // Find href="..."
+            let href_tag = "href=\"";
+            let href_start = match sub_str.find(href_tag) {
+                Some(idx) => idx + href_tag.len(),
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let href_end = match sub_str[href_start..].find('"') {
+                Some(idx) => href_start + idx,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let url_raw = &sub_str[href_start..href_end];
+
+            // Find the title text (inside the <a> tag)
+            let a_close = match sub_str[href_end..].find('>') {
+                Some(idx) => href_end + idx + 1,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let a_end = match sub_str[a_close..].find("</a>") {
+                Some(idx) => a_close + idx,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let title_raw = &sub_str[a_close..a_end];
+            let title = strip_html_tags(title_raw).trim().to_string();
+
+            // Find the result__snippet
+            let snippet_start = match sub_str.find("result__snippet") {
+                Some(idx) => idx,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let snippet_sub = &sub_str[snippet_start..];
+            let snippet_close = match snippet_sub.find('>') {
+                Some(idx) => idx + 1,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let snippet_end = match snippet_sub[snippet_close..].find("</a>") {
+                Some(idx) => snippet_close + idx,
+                None => {
+                    search_str = &search_str[20..];
+                    continue;
+                }
+            };
+            let snippet_raw = &snippet_sub[snippet_close..snippet_end];
+            let snippet = strip_html_tags(snippet_raw).trim().to_string();
+
+            // Clean URL (DuckDuckGo URLs are often /l/?kh=-1&uddg=ENCODED_URL)
+            let clean_url = if url_raw.contains("uddg=") {
+                let parts: Vec<&str> = url_raw.split("uddg=").collect();
+                if parts.len() > 1 {
+                    let encoded_url = parts[1].split('&').next().unwrap_or("");
+                    percent_decode(encoded_url)
+                } else {
+                    url_raw.to_string()
+                }
+            } else {
+                url_raw.to_string()
+            };
+
+            if !title.is_empty() && !snippet.is_empty() {
+                results.push(format!(
+                    "Title: {}\nURL: {}\nSnippet: {}\n",
+                    title, clean_url, snippet
+                ));
+            }
+
+            search_str = &search_str[20..]; // Advance past current block
+            if results.len() >= 8 {
+                break;
+            }
+        }
+
+        if results.is_empty() {
+            Ok(format!(
+                "No search results found for '{}'. Try modifying the query.",
+                query
+            ))
+        } else {
+            Ok(results.join("\n---\n"))
+        }
+    }
+}
+
 fn strip_html_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut chars = html.chars().peekable();
@@ -505,6 +748,7 @@ fn strip_html_tags(html: &str) -> String {
                 }
             }
 
+            let mut added_block = false;
             if is_closing {
                 if tag_buffer == "script" {
                     in_script = false;
@@ -515,6 +759,7 @@ fn strip_html_tags(html: &str) -> String {
                     "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr" | "li"
                 ) {
                     out.push('\n');
+                    added_block = true;
                 }
             } else if tag_buffer == "script" {
                 in_script = true;
@@ -527,6 +772,11 @@ fn strip_html_tags(html: &str) -> String {
                 )
             {
                 out.push('\n');
+                added_block = true;
+            }
+
+            if !added_block && !in_script && !in_style {
+                out.push(' ');
             }
         } else if !in_script && !in_style {
             if c == '&' {
@@ -663,5 +913,246 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+    }
+
+    #[tokio::test]
+    async fn test_web_search_tool() {
+        if std::env::var("CI").is_ok() {
+            println!(
+                "Skipping web search test in CI environment to avoid rate-limiting/network blocks."
+            );
+            return;
+        }
+
+        let tool = WebSearchTool::new();
+        let res = tool
+            .call(json!({
+                "query": "Lionel Messi"
+            }))
+            .await
+            .unwrap();
+
+        assert!(!res.is_empty(), "Search results should not be empty");
+        assert!(
+            !res.contains("No search results found"),
+            "Should find results for popular query"
+        );
+        assert!(
+            res.contains("Messi") || res.contains("messi") || res.contains("Lionel"),
+            "Results should contain query term"
+        );
+    }
+}
+
+// Dynamic Loader Tools
+// ──────────────────────────────────────────────
+
+pub struct ListAvailableToolsAndSkillsTool {
+    state: crate::tools::SharedRegistryState,
+}
+
+impl ListAvailableToolsAndSkillsTool {
+    pub fn new(state: crate::tools::SharedRegistryState) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl Tool for ListAvailableToolsAndSkillsTool {
+    fn name(&self) -> &str {
+        "list_available_tools_and_skills"
+    }
+
+    fn description(&self) -> &str {
+        "List all available offline tools (e.g. MCP servers) and domain-specific skills (instructions/guidelines) that are in the registry but not currently active in the session context. You can load any of these tools/skills using the 'load_tool_or_skill' tool when needed, and you MUST unload them using the 'unload_tool_or_skill' tool once the target has been achieved to keep your context window clean."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    async fn call(&self, _args: Value) -> Result<String> {
+        let state = self.state.lock().unwrap();
+        let mut output = String::new();
+        output.push_str("--- AVAILABLE REGISTERED MCP TOOLS ---\n");
+        if state.all_mcp_tools.is_empty() {
+            output.push_str("  (None registered)\n");
+        } else {
+            for (name, tool) in &state.all_mcp_tools {
+                let status = if state.active_tools.contains(name) {
+                    "[ACTIVE]"
+                } else {
+                    "[UNLOADED]"
+                };
+                output.push_str(&format!(
+                    "  - {} {}: {}\n",
+                    name,
+                    status,
+                    tool.description()
+                ));
+            }
+        }
+
+        output.push_str("\n--- AVAILABLE DOMAIN-SPECIFIC SKILLS ---\n");
+        if state.all_skills.is_empty() {
+            output.push_str("  (None registered)\n");
+        } else {
+            for name in state.all_skills.keys() {
+                let status = if state.active_skills.contains(name) {
+                    "[ACTIVE]"
+                } else {
+                    "[UNLOADED]"
+                };
+                output.push_str(&format!("  - {} {}\n", name, status));
+            }
+        }
+
+        output.push_str("\nNote: You can load any tool or skill into your context using 'load_tool_or_skill'. When you are done with the task, unload them using 'unload_tool_or_skill' to keep the context clean.");
+        Ok(output)
+    }
+}
+
+pub struct LoadToolOrSkillTool {
+    state: crate::tools::SharedRegistryState,
+}
+
+impl LoadToolOrSkillTool {
+    pub fn new(state: crate::tools::SharedRegistryState) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl Tool for LoadToolOrSkillTool {
+    fn name(&self) -> &str {
+        "load_tool_or_skill"
+    }
+
+    fn description(&self) -> &str {
+        "Load a registered tool (e.g. MCP wrapper) or skill (domain instructions) into your active context so you can use it. Returns confirmation."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "The exact name of the tool or skill to load" },
+                "kind": { "type": "string", "enum": ["tool", "skill"], "description": "The type of registry item being loaded" }
+            },
+            "required": ["name", "kind"]
+        })
+    }
+
+    async fn call(&self, args: Value) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .context("'name' is required")?
+            .trim()
+            .to_string();
+        let kind = args["kind"].as_str().context("'kind' is required")?.trim();
+
+        let mut state = self.state.lock().unwrap();
+        match kind {
+            "tool" => {
+                if !state.all_mcp_tools.contains_key(&name) {
+                    anyhow::bail!("MCP tool '{}' not found in registry.", name);
+                }
+                if state.active_tools.insert(name.clone()) {
+                    state.changed = true;
+                    Ok(format!(
+                        "Successfully loaded MCP tool '{}' into session context.",
+                        name
+                    ))
+                } else {
+                    Ok(format!("MCP tool '{}' is already loaded.", name))
+                }
+            }
+            "skill" => {
+                if !state.all_skills.contains_key(&name) {
+                    anyhow::bail!("Skill '{}' not found in registry.", name);
+                }
+                if state.active_skills.insert(name.clone()) {
+                    state.changed = true;
+                    Ok(format!(
+                        "Successfully loaded skill '{}' into session context.",
+                        name
+                    ))
+                } else {
+                    Ok(format!("Skill '{}' is already loaded.", name))
+                }
+            }
+            _ => anyhow::bail!("Invalid kind '{}'. Must be 'tool' or 'skill'.", kind),
+        }
+    }
+}
+
+pub struct UnloadToolOrSkillTool {
+    state: crate::tools::SharedRegistryState,
+}
+
+impl UnloadToolOrSkillTool {
+    pub fn new(state: crate::tools::SharedRegistryState) -> Self {
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl Tool for UnloadToolOrSkillTool {
+    fn name(&self) -> &str {
+        "unload_tool_or_skill"
+    }
+
+    fn description(&self) -> &str {
+        "Unload a tool or skill from your active context once you have achieved the target for it. This cleans your prompt context window."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "description": "The name of the tool or skill to unload" },
+                "kind": { "type": "string", "enum": ["tool", "skill"], "description": "The type of registry item being unloaded" }
+            },
+            "required": ["name", "kind"]
+        })
+    }
+
+    async fn call(&self, args: Value) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .context("'name' is required")?
+            .trim()
+            .to_string();
+        let kind = args["kind"].as_str().context("'kind' is required")?.trim();
+
+        let mut state = self.state.lock().unwrap();
+        match kind {
+            "tool" => {
+                if state.active_tools.remove(&name) {
+                    state.changed = true;
+                    Ok(format!(
+                        "Successfully unloaded MCP tool '{}' from session context.",
+                        name
+                    ))
+                } else {
+                    Ok(format!("MCP tool '{}' was not loaded.", name))
+                }
+            }
+            "skill" => {
+                if state.active_skills.remove(&name) {
+                    state.changed = true;
+                    Ok(format!(
+                        "Successfully unloaded skill '{}' from session context.",
+                        name
+                    ))
+                } else {
+                    Ok(format!("Skill '{}' was not loaded.", name))
+                }
+            }
+            _ => anyhow::bail!("Invalid kind '{}'. Must be 'tool' or 'skill'.", kind),
+        }
     }
 }

@@ -2,11 +2,11 @@
 //!
 //! Helix is a high-performance, self-optimizing autonomous AI agent harness and library built natively in Rust.
 //! Designed as an interactive workspace companion, Helix provides fine-grained control over agent execution
-//! loops, context window budget alignment, session persistence, and secure command execution.
+//! loops, context window engineering, session persistence, and secure command execution.
 //!
 //! ## System Architecture
 //!
-//! For a high-level visual flowchart of data ingestion, search routing, reasoning loops, and tool execution, see the [System Architecture diagram in the README](https://github.com/poornachandra24/Helix#%EF%B8%8F-system-architecture).
+//! For a high-level visual flowchart of data ingestion, search routing, reasoning loops, and tool execution, see the [System Architecture diagram in the README](https://github.com/poornachandra24/Helix#system-architecture).
 //!
 //! ## Mathematical Foundations
 //!
@@ -69,12 +69,15 @@
 //!
 //! ## Core Subsystems
 //!
-//! *   **`core`**: The execution engine, responsible for coordinating tool iterations, metric collection, and agent healing.
-//! *   **`memory`**: A quantized semantic vector search index (`turbovec`) utilizing offline ONNX embeddings (`fastembed`) and SQLite metadata.
-//! *   **`model`**: Language model interfaces, API provider abstractions, and schema-guided validation.
-//! *   **`tools`**: Built-in system tools (file I/O, web browsing), sandboxed execution backends (Docker, Local, and metered WebAssembly/WASI sandboxing via `wasmi`), and Model Context Protocol (MCP) client capabilities.
+//! *   **`core`**: The execution engine, responsible for coordinating tool iterations, metric collection, agent self-correction, and the reflective scratchpad planning loop.
+//! *   **`memory`**: The Helix Knowledge Engine, implementing a three-tier knowledge framework:
+//!     *   **Procedural Knowledge** — self-correction via `HelixScratchpad` grounding; stores current execution plan and gap-closure strategies in `.helix_scratchpad.md`.
+//!     *   **Episodic Knowledge** — session history and post-mortem LLM-generated reflection summaries written to `<data_dir>/memory/sessions/`.
+//!     *   **Long-Term Knowledge** — hybrid retrieval combining quantized semantic vector search (`turbovec` 4-bit TurboQuant, SIMD cosine similarity) with lexical FTS5 BM25 full-text search in SQLite, fused via Reciprocal Rank Fusion (RRF).
+//! *   **`model`**: Language model interfaces, API provider abstractions, streaming response parsing, and reasoning content extraction.
+//! *   **`tools`**: Built-in system tools (file I/O, web browsing), sandboxed execution backends (Docker, Local, metered WebAssembly/WASI via `wasmi`), and Model Context Protocol (MCP) client capabilities.
 //! *   **`config`**: Credentials, model templates, custom configuration pathways, and setup wizard logic.
-//! *   **`cli`**: Prompt input-loop, terminal-adaptive layout renderers, and interactive REPL command routing.
+//! *   **`cli`**: Prompt input-loop, terminal-adaptive layout renderers, interactive REPL command routing, and stream telemetry display.
 //! *   **`error`**: Unified error hierarchy and healer classification metrics.
 //!
 //! ---
@@ -97,12 +100,31 @@
 //!
 //! ---
 //!
+//! ## Context Window Engineering
+//!
+//! Regardless of the complexity of memory retrieval, file systems, or external MCP servers, the intelligence
+//! and accuracy of Helix are entirely dictated by the exact contents of the LLM context window at the moment
+//! of each API call. The `core::context` module manages this with precision:
+//!
+//! *   **Token Estimation**: `tiktoken-rs` counts exact token consumption of system prompts, tool schemas, and conversation history before each request.
+//! *   **Response Headroom**: A dedicated output buffer (typically 4,096 tokens) is reserved so the model always has sufficient room to complete its chain-of-thought and tool call responses.
+//! *   **Compaction Algorithm**: When total tokens exceed `max_tokens - headroom`, the oldest turns are sent to an LLM summarization pass and replaced with a single Markdown summary block, preserving long-term context without overflowing the budget.
+//!
+//! See [docs/context_window_engineering.md](https://github.com/poornachandra24/Helix/blob/main/docs/context_window_engineering.md) for a detailed breakdown.
+//!
 //! ## Model Context Protocol (MCP) Support
 //!
-//! Helix natively supports the Model Context Protocol (MCP) via the stdio transport layer. External tools
-//! can be dynamically spawned and registered at boot time by specifying server configurations in an
-//! `mcp_config.json` file. MCP tools are wrapped and registered in the unified tools module, enabling
-//! seamless interaction between the language model and third-party context servers.
+//! Helix natively supports the Model Context Protocol (MCP) via the `stdio` transport layer. There is a
+//! critical distinction between two stages of the tool lifecycle:
+//!
+//! *   **Registration**: On boot or hot-reload, Helix spawns MCP server subprocesses, performs the JSON-RPC
+//!     `tools/list` handshake, and wraps each discovered schema as a `dyn Tool` in the `ToolRegistry`.
+//!     At this stage tools are available to the system but have **zero token footprint** on the LLM.
+//! *   **Context Window Injection**: At the start of each prompt turn, Helix serializes the allowed registered
+//!     tools into JSON Schema definitions and injects them into the `tools` array of the Chat Completion
+//!     payload. Once injected they **directly consume the active context window token budget**.
+//!
+//! See [docs/mcp_integration.md](https://github.com/poornachandra24/Helix/blob/main/docs/mcp_integration.md) for the full lifecycle diagram.
 //!
 //! ## Open Source Credits & Dependencies
 //!
@@ -121,26 +143,20 @@
 //!
 //! The following capabilities are under active research and development:
 //!
-//! ### 1. OTLP Tracing & Observability (helix-telemetry)
-//! Integrate native OpenTelemetry (`opentelemetry` & `tracing-opentelemetry`) to export spans for model latencies, vector DB search queries, and sandbox executions to external collectors (e.g. Jaeger, Honeycomb).
+//! ### Short-Term (Next 1-3 Months): Observability & Diagnostics
+//! *   **OTLP Tracing & Observability**: Integrate native OpenTelemetry (`opentelemetry` & `tracing-opentelemetry`) to export spans for model latencies, vector DB search queries, and sandbox executions to external collectors (e.g. Jaeger, Honeycomb).
+//! *   **WASM Sandbox Resource Profiling**: Expose WASM guest execution resource statistics (fuel/gas consumed via `wasmi` and sandbox directory disk footprint) directly into the telemetry subscriber.
+//! *   **TUI Performance Overlay**: Add a lightweight, interactive terminal visualization showing real-time token budgets, memory retrieval quality scores, and tool execution cycles.
 //!
-//! ### 2. WASM Sandbox Resource Profiling (helix-profiler)
-//! Expose WASM guest execution resource statistics (fuel/gas consumed via `wasmi` and sandbox directory disk footprint) directly into the telemetry subscriber.
+//! ### Mid-Term (Next 3-6 Months): Multimodal & Developer Extensibility
+//! *   **Multimodal Input Support**: Refactor the inner message structure from a plain `String` to content-part enums, allowing users to attach screenshots or file buffers, and update the API drivers (Ollama/OpenAI) to support vision models.
+//! *   **WASM/WASI Plugin SDK**: Develop a structured SDK and manifest format allowing developers to write custom tools in Rust, C, or Go, compile them to WebAssembly, and dynamically register them in the sandbox.
+//! *   **Dynamic SLM-Based Context Compaction**: Implement smart context compression utilizing a local Small Language Model (SLM) to summarize old chat turns instead of simple turn omission.
 //!
-//! ### 3. TUI Performance Overlay (helix-tui)
-//! Add a lightweight, interactive terminal visualization showing real-time token budgets, memory retrieval quality scores, and tool execution cycles.
-//!
-//! ### 4. Multimodal Input Support (helix-multimodal)
-//! Refactor the inner message structure from a plain `String` to content-part enums, allowing users to attach screenshots or file buffers, and update the API drivers (Ollama/OpenAI) to support vision models.
-//!
-//! ### 5. WASM/WASI Plugin SDK (helix-sdk)
-//! Develop a structured SDK and manifest format allowing developers to write custom tools in Rust, C, or Go, compile them to WebAssembly, and dynamically register them in the sandbox.
-//!
-//! ### 6. Dynamic SLM-Based Context Compaction (helix-compaction)
-//! Implement smart context compression utilizing a local Small Language Model (SLM) to summarize old chat turns instead of simple turn omission.
-//!
-//! ### 7. Provider-Agnostic Heterogeneous Multi-Agent Orchestration (helix-orchestrate)
-//! Spawning concurrent, isolated child agents inside separate WASI sandboxes, utilizing smaller, specialized models or large models across heterogeneous providers (OpenAI, Anthropic, Ollama, Groq) to collaborate on sub-tasks. The orchestration engine dynamically handles task routing and communication, abstracting away model selection and provider configurations so the user can focus purely on task outcomes regardless of token consumption.
+//! ### Long-Term (6+ Months): Concurrency & GPU Acceleration
+//! *   **Provider-Agnostic Heterogeneous Multi-Agent Orchestration**: Spawn concurrent, isolated child agents inside separate WASI sandboxes across heterogeneous providers (OpenAI, Anthropic, Ollama, Groq) to collaborate on sub-tasks.
+//! *   **Semantic Knowledge Graph Index**: Transition from flat vector memories to a structured, local semantic knowledge graph capturing entities and relationships.
+//! *   **GPU & Hardware Inference Acceleration**: Optimize ONNX runtime GPU execution providers for local embedding generation.
 
 #![allow(clippy::missing_safety_doc)]
 

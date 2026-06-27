@@ -2316,7 +2316,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rusqlite",
- "ruvector-sona 0.2.0",
+ "ruvector-sona 0.3.0",
  "ruvllm",
  "serde",
  "serde_json",
@@ -3184,9 +3184,9 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "memmap2"
-version = "0.9.10"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
  "stable_deref_trait",
@@ -4227,9 +4227,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -4873,6 +4873,20 @@ dependencies = [
 
 [[package]]
 name = "ruvector-sona"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02a9465310393f43fc9ba2409cbf819c543ef16e0eb1791090351bfc4833c158"
+dependencies = [
+ "crossbeam",
+ "getrandom 0.2.17",
+ "parking_lot",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ruvector-sona"
 version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
@@ -4890,20 +4904,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "ruvector-sona"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02a9465310393f43fc9ba2409cbf819c543ef16e0eb1791090351bfc4833c158"
-dependencies = [
- "crossbeam",
- "getrandom 0.2.17",
- "parking_lot",
- "rand 0.8.6",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -4931,7 +4931,7 @@ dependencies = [
  "rand 0.8.6",
  "regex",
  "ruvector-core",
- "ruvector-sona 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ruvector-sona 0.2.0",
  "serde",
  "serde_json",
  "sha2",
@@ -5482,7 +5482,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.60.2",

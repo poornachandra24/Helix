@@ -23,3 +23,6 @@ target
 
 # Local state data
 data/
+
+# Scratchpad and planning runtime files
+.helix_scratchpad.md

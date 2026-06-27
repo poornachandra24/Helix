@@ -35,6 +35,16 @@ sequenceDiagram
 ### Self-Healing Parser
 If the LLM outputs malformed tool call JSON, the `Engine` captures the parsing error, executes `classify_and_diagnose_parse_error`, and automatically sends a correction prompt to the model (up to 3 retries) before failing, ensuring high agent reliability.
 
+### Self-Correction & Reflection Strategy
+To handle complex and error-prone multi-step tasks, Helix incorporates an autonomous Self-Correction & Planning Loop coupled with a Dynamic Workspace Scratchpad:
+1.  **Complexity Classification**: Upon receiving a query, Helix classifies its complexity. Simple queries bypass the scratchpad and reflection loop entirely for a lightweight footprint, while complex queries activate them.
+2.  **Dynamic Scratchpad (`.helix_scratchpad.md`)**: A local markdown scratchpad is created on-the-fly when complex reasoning begins. The contents of the scratchpad are read at the start of each step and dynamically injected into the model's system prompt to maintain state and context grounding.
+3.  **Self-Correction Loop**: When a tool execution fails or returns an error, the engine pauses and executes an internal reflection turn. The model is prompted to evaluate:
+    *   **Current State**: What is the current progress and what exactly failed?
+    *   **Target State**: What is the final target condition to achieve the user's goal?
+    *   **Strategy to Close Gap**: How does the proposed plan adjust to overcome the error and close the gap between the current state and target state?
+4.  **Telemetry Trace**: The structured reflection is written back to the scratchpad to guide the next iteration, and streamed live to the user interface (under a `▼ Thinking Process` header) for real-time visibility into the agent's reasoning.
+
 ---
 
 ## 2. Context Window Manager (`context.rs`)

@@ -170,6 +170,27 @@ impl HelixMemoryEngine {
         Ok(())
     }
 
+    /// Delete the last recorded memory item for this workspace.
+    pub fn delete_last_memory(&mut self, workspace_path: &str) -> anyhow::Result<bool> {
+        use rusqlite::OptionalExtension;
+        let last_row: Option<(i64, String)> = self.db.query_row(
+            "SELECT id, text FROM memory_metadata WHERE workspace_path = ? ORDER BY id DESC LIMIT 1",
+            rusqlite::params![workspace_path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        ).optional()?;
+
+        if let Some((id, _text)) = last_row {
+            self.db.execute(
+                "DELETE FROM memory_metadata WHERE id = ?",
+                rusqlite::params![id],
+            )?;
+            self.persist()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// Retrieves memories matching the query, restricted to the active workspace.
     ///
     /// Executes a hybrid search combining:

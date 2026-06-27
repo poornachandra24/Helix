@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::config::{ApiFormat, AppConfig};
 
-const FALLBACK_CONTEXT_WINDOW: usize = 8_192;
+const FALLBACK_CONTEXT_WINDOW: usize = 16_384;
 
 // ──────────────────────────────────────────────
 // Public entry point

@@ -11,7 +11,7 @@ Designed as a research-oriented tool-calling harness, Helix provides fine-graine
 > *   **Security Warning**: Running Helix with native local tool permissions allows the LLM to execute arbitrary code on your host machine. Always use the built-in **Docker** or **WebAssembly (Wasm)** sandbox backends to isolate execution environments.
 ---
 
-## 🏛️ System Architecture
+## System Architecture
 
 ```mermaid
 graph TD
@@ -30,7 +30,7 @@ graph TD
 
 ---
 
-## ⚙️ Optimization & Adaptation Mechanisms
+## Optimization & Adaptation Mechanisms
 
 Helix implements a feedback loop to improve retrieval accuracy over time:
 
@@ -41,7 +41,7 @@ Helix implements a feedback loop to improve retrieval accuracy over time:
 
 ---
 
-## 🛠️ Key Capabilities
+## Key Capabilities
 
 - **Quantized Semantic Memory Index**: Combines SQLite metadata with a 4-bit TurboQuant vector index (`turbovec`) and offline ONNX `BAAI/bge-small-en-v1.5` embeddings (`fastembed`). Baseline memory footprint is ~227 MiB RSS, scaling at ~3.2 MiB per 100k memories (see [docs/memory_architecture.md](docs/memory_architecture.md)).
 - **Query Projection Tuning**: Applies gradient adjustments to the LoRA retrieval weights, aligning semantic searches to context that previously led to successful turns.
@@ -55,7 +55,7 @@ Helix implements a feedback loop to improve retrieval accuracy over time:
 
 ---
 
-## 🖥️ Terminal UI Design
+## Terminal UI Design
 
 Helix uses a two-tone boxed conversation layout:
 
@@ -85,7 +85,7 @@ For full color token definitions and box math, see [docs/ux_design.md](docs/ux_d
 
 ---
 
-## 📥 Quick Start & Installation
+## Quick Start & Installation
 
 Install Helix CLI on your local machine with a single setup command:
 
@@ -114,7 +114,7 @@ docker run -it --rm \
 
 ---
 
-## 🛠️ Local Development & Building
+## Local Development & Building
 
 If you are developing Helix locally:
 
@@ -133,26 +133,27 @@ cargo run -- -vv
 
 ---
 
-## 💬 REPL Commands
-
-### Core Commands & Session Control
+## REPL Commands
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show this command guide |
+| `/help` | Show the command guide |
 | `/status` | Show active model, context budget, SONA & optimization stats |
-| `/clear` | Reset current chat history context |
+| `/clear` | Reset current chat history and trigger session reflection |
+| `/forget` \| `/purge` | Delete the last user/assistant turn from history, session file, and memory |
 | `/config` | Reconfigure active provider / model |
 | `/providers` | List configured API providers |
-| `/use <name> [model]` | Hot-switch provider/model in the current session |
+| `/use <name> [model]` | Hot-switch provider/model mid-session |
 | `/sessions` | List previous chat sessions |
 | `/resume <id>` | Load a past session into the active context |
 | `/memory [query]` | Search/manage semantic memory (`--clear` to wipe) |
+| `/thinking [level]` | Set or show reasoning effort (`low`, `medium`, `high`, `off`, or token budget) |
+| `/optimize` | Force SONA neural adaptation & parameter consolidation |
 | `/exit` \| `/quit` | Exit the REPL session |
 
 ---
 
-## 🔌 Model Context Protocol (INPUT)
+## Model Context Protocol
 
 Helix natively supports external tool servers conforming to MCP over `stdio` transport. Specify servers in `mcp_config.json` in the current directory or config directory, and Helix will spawn, initialize, and register their tool schemas on boot.
 
@@ -160,19 +161,24 @@ See [docs/mcp_integration.md](docs/mcp_integration.md) for details.
 
 ---
 
-## 📖 Documentation
+## Documentation
 
 | Document | Contents |
 |----------|----------|
-| [docs/installation.md](docs/installation.md) | Dedicated Installation, setup wizard, Docker & config guide |
-| [docs/memory_architecture.md](docs/memory_architecture.md) | Dual-store memory design, data flow, footprint profiles |
-| [docs/mcp_integration.md](docs/mcp_integration.md) | MCP client subsystem, process lifecycle, config |
+| [docs/architecture.md](docs/architecture.md) | Core engine design, self-correction strategy, orchestration loop |
+| [docs/context_window_engineering.md](docs/context_window_engineering.md) | Context window as ground truth, tool injection vs registration, compaction algorithm |
+| [docs/memory_architecture.md](docs/memory_architecture.md) | Procedural/episodic/long-term knowledge framework, hybrid retrieval data flow |
+| [docs/mcp_integration.md](docs/mcp_integration.md) | MCP client subsystem, dynamic registration vs context injection, hot-reload |
+| [docs/installation.md](docs/installation.md) | Installation, setup wizard, Docker & config guide |
+| [docs/edge_deployment.md](docs/edge_deployment.md) | Local, Docker sandbox, and Wasm deployment modes |
 | [docs/ux_design.md](docs/ux_design.md) | Terminal UI system, color tokens, box math, telemetry format |
 | [docs/skills.md](docs/skills.md) | Custom instruction files scanning and prompt injection |
+| [docs/plugin_development.md](docs/plugin_development.md) | Writing custom Rust tools, MCP servers, and Markdown skills |
+| [docs/security.md](docs/security.md) | Security architecture, CI gates, vulnerability reporting |
 
 ---
 
-## 🏷️ Citation
+## Citation
 
 If you use Helix in your research, academic publications, or technical reports, please cite the project as follows:
 

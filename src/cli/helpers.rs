@@ -15,7 +15,8 @@ pub fn print_banner(
     memory_size: usize,
     patterns_count: usize,
     context_limit: usize,
-    active_skills: &[String],
+    registered_skills: &[String],
+    registered_mcps: &[String],
 ) {
     use comfy_table::modifiers::UTF8_ROUND_CORNERS;
     use comfy_table::presets::UTF8_BORDERS_ONLY;
@@ -78,8 +79,8 @@ pub fn print_banner(
     table.apply_modifier(UTF8_ROUND_CORNERS);
     table.set_width(58);
     table.set_constraints(vec![
-        ColumnConstraint::Absolute(Width::Fixed(15)),
-        ColumnConstraint::Absolute(Width::Fixed(39)),
+        ColumnConstraint::Absolute(Width::Fixed(17)),
+        ColumnConstraint::Absolute(Width::Fixed(37)),
     ]);
 
     // Row 1: Header
@@ -95,8 +96,8 @@ pub fn print_banner(
 
     // Row 2: Separator
     table.add_row(vec![
-        Cell::new("───────────────").fg(Color::DarkGrey),
-        Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
+        Cell::new("─────────────────").fg(Color::DarkGrey),
+        Cell::new("─────────────────────────────────────").fg(Color::DarkGrey),
     ]);
 
     // Row 3, 4, 5: Provider, Model, Context Limit, Workspace
@@ -129,8 +130,8 @@ pub fn print_banner(
 
     // Row 6: Separator
     table.add_row(vec![
-        Cell::new("───────────────").fg(Color::DarkGrey),
-        Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
+        Cell::new("─────────────────").fg(Color::DarkGrey),
+        Cell::new("─────────────────────────────────────").fg(Color::DarkGrey),
     ]);
 
     // Row 7, 8, 9: Session ID, Memory Size, Sona State
@@ -154,32 +155,49 @@ pub fn print_banner(
             .add_attribute(Attribute::Bold),
         Cell::new(&sona_str).fg(Color::White),
     ]);
-    let skills_str = if active_skills.is_empty() {
-        "none loaded".to_string()
+
+    let skills_str = if registered_skills.is_empty() {
+        "none registered".to_string()
     } else {
         format!(
-            "{} loaded ({})",
-            active_skills.len(),
-            active_skills.join(", ")
+            "{} available ({})",
+            registered_skills.len(),
+            registered_skills.join(", ")
         )
     };
     table.add_row(vec![
-        Cell::new("ACTIVE SKILLS")
+        Cell::new("REGISTERED SKILLS")
             .fg(Color::DarkGrey)
             .add_attribute(Attribute::Bold),
         Cell::new(&skills_str).fg(Color::White),
     ]);
 
+    let mcps_str = if registered_mcps.is_empty() {
+        "none registered".to_string()
+    } else {
+        format!(
+            "{} available ({})",
+            registered_mcps.len(),
+            registered_mcps.join(", ")
+        )
+    };
+    table.add_row(vec![
+        Cell::new("REGISTERED MCPS")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
+        Cell::new(&mcps_str).fg(Color::White),
+    ]);
+
     // Row 10: Separator
     table.add_row(vec![
-        Cell::new("───────────────").fg(Color::DarkGrey),
-        Cell::new("───────────────────────────────────────").fg(Color::DarkGrey),
+        Cell::new("─────────────────").fg(Color::DarkGrey),
+        Cell::new("─────────────────────────────────────").fg(Color::DarkGrey),
     ]);
 
     // Row 11: Help
     table.add_row(vec![
         Cell::new("💡").set_alignment(CellAlignment::Center),
-        Cell::new("Type /help to list system commands.").fg(Color::Cyan),
+        Cell::new("Model will dynamically load tools & skills on its own\nand unload them once the target is achieved.").fg(Color::Cyan),
     ]);
 
     println!("{table}");
@@ -201,11 +219,12 @@ pub fn build_tool_registry(
     registry.register(builtins::ListDirTool::new(sandbox.clone()));
     registry.register(builtins::WasmExecuteTool::new(sandbox.clone()));
     registry.register(builtins::WebFetchTool::new());
+    registry.register(builtins::WebSearchTool::new());
     registry.register(builtins::AddSkillTool::new(skills_dir));
     registry
 }
 
-pub async fn init_mcp_tools(tools: &mut tools::ToolRegistry) -> Result<mcp::McpRegistry> {
+pub async fn init_mcp_tools() -> Result<(mcp::McpRegistry, Vec<mcp::McpWrappedTool>)> {
     let mut mcp_registry = mcp::McpRegistry::new();
     let mcp_config_path = std::path::Path::new("mcp_config.json");
     let user_mcp_config_path = config::get_config_dir()?.join("mcp_config.json");
@@ -215,19 +234,18 @@ pub async fn init_mcp_tools(tools: &mut tools::ToolRegistry) -> Result<mcp::McpR
         &user_mcp_config_path
     };
 
+    let mut mcp_tools = Vec::new();
     if active_mcp_path.exists() {
         match mcp_registry.load_and_initialize(active_mcp_path).await {
-            Ok(mcp_tools) => {
-                for tool in mcp_tools {
-                    tools.register(tool);
-                }
+            Ok(tools) => {
+                mcp_tools = tools;
             }
             Err(e) => {
                 eprintln!("⚠️  [MCP] Error loading MCP configuration: {}", e);
             }
         }
     }
-    Ok(mcp_registry)
+    Ok((mcp_registry, mcp_tools))
 }
 
 pub fn build_model(config: &config::AppConfig) -> Box<dyn model::ModelAdapter> {
@@ -622,20 +640,22 @@ pub fn confirm_agent_action(
         Cell::new(&div_value).fg(Color::DarkGrey),
     ]);
 
+    let wrapped_desc = wrap_text(description, value_col as usize).join("\n");
     table.add_row(vec![
         Cell::new("Action Details")
             .fg(Color::DarkGrey)
             .add_attribute(Attribute::Bold),
-        Cell::new(description).fg(Color::White),
+        Cell::new(&wrapped_desc).fg(Color::White),
     ]);
 
     if let Some(det) = details {
         let redacted = redact_secrets(det);
+        let wrapped_det = wrap_text(&redacted, value_col as usize).join("\n");
         table.add_row(vec![
             Cell::new("Target/Payload")
                 .fg(Color::DarkGrey)
                 .add_attribute(Attribute::Bold),
-            Cell::new(&redacted).fg(Color::Cyan),
+            Cell::new(&wrapped_det).fg(Color::Cyan),
         ]);
     }
 
