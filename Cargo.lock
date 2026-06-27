@@ -2316,7 +2316,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "rusqlite",
- "ruvector-sona 0.2.0",
+ "ruvector-sona 0.3.0",
  "ruvllm",
  "serde",
  "serde_json",
@@ -4873,6 +4873,20 @@ dependencies = [
 
 [[package]]
 name = "ruvector-sona"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02a9465310393f43fc9ba2409cbf819c543ef16e0eb1791090351bfc4833c158"
+dependencies = [
+ "crossbeam",
+ "getrandom 0.2.17",
+ "parking_lot",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ruvector-sona"
 version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
@@ -4890,20 +4904,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "ruvector-sona"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02a9465310393f43fc9ba2409cbf819c543ef16e0eb1791090351bfc4833c158"
-dependencies = [
- "crossbeam",
- "getrandom 0.2.17",
- "parking_lot",
- "rand 0.8.6",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -4931,7 +4931,7 @@ dependencies = [
  "rand 0.8.6",
  "regex",
  "ruvector-core",
- "ruvector-sona 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ruvector-sona 0.2.0",
  "serde",
  "serde_json",
  "sha2",

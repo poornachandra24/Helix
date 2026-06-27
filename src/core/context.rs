@@ -118,7 +118,7 @@ impl ContextBudget {
 impl Default for ContextBudget {
     fn default() -> Self {
         Self {
-            model_window: 8_192,
+            model_window: 16_384,
             system_prompt_tokens: 0,
             tool_descriptor_tokens: 0,
             response_headroom: 2_048,
