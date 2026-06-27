@@ -126,6 +126,22 @@ jobs:
         with:
           key: ${{ matrix.os }}-clippy
 
+      - name: Fix clang_rt link path (macOS / Xcode 16.x)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          # Xcode 16.x moved clang runtime to a versioned subdir (e.g. 17.0.0/)
+          # but some crate build scripts still search the short path (17/).
+          # Find the actual library and expose its directory via RUSTFLAGS.
+          CLANG_RT=$(clang -print-file-name=libclang_rt.osx.a 2>/dev/null || echo "")
+          if [ -n "$CLANG_RT" ] && [ -f "$CLANG_RT" ]; then
+            RT_DIR=$(dirname "$CLANG_RT")
+            echo "RUSTFLAGS=-L $RT_DIR" >> $GITHUB_ENV
+            echo "clang runtime dir: $RT_DIR"
+          else
+            echo "libclang_rt.osx.a not found via clang -print-file-name; skipping patch"
+          fi
+
       - name: Run Clippy Linter
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -173,6 +189,22 @@ jobs:
       - name: Setup Test Directories
         shell: bash
         run: mkdir -p wasm_jail
+
+      - name: Fix clang_rt link path (macOS / Xcode 16.x)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          # Xcode 16.x moved clang runtime to a versioned subdir (e.g. 17.0.0/)
+          # but some crate build scripts still search the short path (17/).
+          # Find the actual library and expose its directory via RUSTFLAGS.
+          CLANG_RT=$(clang -print-file-name=libclang_rt.osx.a 2>/dev/null || echo "")
+          if [ -n "$CLANG_RT" ] && [ -f "$CLANG_RT" ]; then
+            RT_DIR=$(dirname "$CLANG_RT")
+            echo "RUSTFLAGS=-L $RT_DIR" >> $GITHUB_ENV
+            echo "clang runtime dir: $RT_DIR"
+          else
+            echo "libclang_rt.osx.a not found via clang -print-file-name; skipping patch"
+          fi
 
       - name: Run Test Suite
         run: cargo test --all-targets --all-features
