@@ -235,3 +235,10 @@ graph LR
 - **Summarization**: The engine passes the active session history to the LLM cloud/local engine, asking it to write a structured summary highlighting the goals achieved, technical decisions made, and outstanding issues.
 - **Indexing**: The generated summary is written to `<data_dir>/memory/sessions/` and automatically embedded and indexed in SQLite and `turbovec`. Future sessions starting in the same workspace automatically inherit these key learnings.
 
+### 7.1 Long-Term Evolution & Multi-Session Dynamics (Over Time)
+As you execute multiple programming sessions in a workspace, Helix's reflective memory index evolves. This provides three critical benefits over time:
+
+1.  **Context-Sparing History Preservation**: Raw, verbose session transcripts grow exponentially and would quickly saturate the LLM's context window. By condensing each session into a highly dense Markdown reflection (~500 tokens), Helix can index and recall weeks of workspace history simultaneously without exceeding active token limits.
+2.  **Mitigation of Catastrophic Forgetting**: Instead of forcing the model to remember all past actions, Helix uses vector similarity and full-text keyword indexing to perform dynamic retrieval. If you query about a module modified three weeks ago, Helix retrieves only the specific session summary where those architectural decisions were made. This ensures relevant historical context is loaded on-demand, preventing the agent from repeating previously solved mistakes.
+3.  **Active Developer Handover (Warm Starts)**: On starting any new REPL session in the workspace, the top RRF-ranked summaries are retrieved and injected directly into the LLM system prompt. This acts as a real-time handover bridge: the agent immediately knows where you left off, what decisions were finalized, and what outstanding issues require attention next, enabling an immediate warm start.
+
