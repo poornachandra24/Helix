@@ -1,4 +1,9 @@
-#![allow(clippy::collapsible_if, clippy::collapsible_match, clippy::too_many_arguments, clippy::for_kv_map)]
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::too_many_arguments,
+    clippy::for_kv_map
+)]
 
 use anyhow::Result;
 use console::style;
