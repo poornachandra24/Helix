@@ -19,6 +19,7 @@ use super::persistence::Session;
 use crate::model::{ModelAdapter, ModelResponse, ToolCall};
 use crate::tools::ToolRegistry;
 
+#[cfg(test)]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
@@ -37,6 +38,43 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a.sqrt() * norm_b.sqrt())
 }
 
+pub const GREETINGS: &[(&str, &str)] = &[
+    ("hi", "Hello! How can I help you today?"),
+    ("hello", "Hello! How can I help you today?"),
+    ("hey", "Hey there! How can I help you today?"),
+    (
+        "sup",
+        "Not much! How can I help you with your codebase today?",
+    ),
+    ("yo", "Yo! How can I help you today?"),
+    (
+        "hello there",
+        "General Kenobi! Or rather, hello! How can I help you today?",
+    ),
+    ("hi there", "Hello! How can I help you today?"),
+    (
+        "how are you",
+        "I'm doing great, thank you! Ready to help you with your code.",
+    ),
+    (
+        "what are you",
+        "I am Helix, a local, high-performance, tool-calling AI agent built in Rust.",
+    ),
+    ("who are you", "I am Helix, your local AI coding assistant."),
+    (
+        "what is this",
+        "This is Helix, an autonomous coding agent harness designed to run with local or cloud LLMs.",
+    ),
+    (
+        "how does this work",
+        "Helix connects to your LLM provider of choice, manages workspace memories, and executes tools like bash and file operations to help you build software.",
+    ),
+    (
+        "what can you do",
+        "I can search and read workspace files, execute sandboxed shell commands, run local tools via the Model Context Protocol (MCP), and help you write or debug code.",
+    ),
+];
+
 pub struct Engine {
     /// Boxed model adapter — swap providers at runtime without recompiling.
     pub model: Box<dyn ModelAdapter>,
@@ -53,8 +91,6 @@ pub struct Engine {
     pub memory: Option<crate::memory::HelixMemoryEngine>,
     /// SONA self-optimizing engine.
     pub sona: Option<Arc<SonaEngine>>,
-    /// Pre-computed embeddings for greetings and starter queries.
-    pub semantic_cache: Vec<(String, String, Vec<f32>)>,
     pub core_tools: std::collections::HashMap<String, Arc<dyn crate::tools::Tool>>,
     pub dynamic_registry: crate::tools::SharedRegistryState,
 }
@@ -79,7 +115,6 @@ impl Engine {
             metrics: None,
             memory: None,
             sona: None,
-            semantic_cache: vec![],
             core_tools,
             dynamic_registry,
         }
@@ -94,51 +129,7 @@ impl Engine {
             crate::core::context::TokenEstimator::estimate_tool_descriptors(&descs);
     }
 
-    pub fn with_memory(mut self, mut memory: crate::memory::HelixMemoryEngine) -> Self {
-        let candidates = vec![
-            ("hi", "Hello! How can I help you today?"),
-            ("hello", "Hello! How can I help you today?"),
-            ("hey", "Hey there! How can I help you today?"),
-            (
-                "sup",
-                "Not much! How can I help you with your codebase today?",
-            ),
-            ("yo", "Yo! How can I help you today?"),
-            (
-                "hello there",
-                "General Kenobi! Or rather, hello! How can I help you today?",
-            ),
-            ("hi there", "Hello! How can I help you today?"),
-            (
-                "how are you",
-                "I'm doing great, thank you! Ready to help you with your code.",
-            ),
-            (
-                "what are you",
-                "I am Helix, a local, high-performance, tool-calling AI agent built in Rust.",
-            ),
-            ("who are you", "I am Helix, your local AI coding assistant."),
-            (
-                "what is this",
-                "This is Helix, an autonomous coding agent harness designed to run with local or cloud LLMs.",
-            ),
-            (
-                "how does this work",
-                "Helix connects to your LLM provider of choice, manages workspace memories, and executes tools like bash and file operations to help you build software.",
-            ),
-            (
-                "what can you do",
-                "I can search and read workspace files, execute sandboxed shell commands, run local tools via the Model Context Protocol (MCP), and help you write or debug code.",
-            ),
-        ];
-
-        let mut cache = Vec::new();
-        for (q, r) in candidates {
-            if let Ok(emb) = memory.embed_text(q) {
-                cache.push((q.to_string(), r.to_string(), emb));
-            }
-        }
-        self.semantic_cache = cache;
+    pub fn with_memory(mut self, memory: crate::memory::HelixMemoryEngine) -> Self {
         self.memory = Some(memory);
         self
     }
@@ -412,32 +403,15 @@ impl Engine {
             .as_deref()
             .map(|s| s.begin_trajectory(query_embedding.clone()));
 
-        // ── Check Semantic Cache ─────────────────────────────
+        // ── Check Greetings Cache (Lexical check) ─────────────────────────────
         let cleaned = input.trim().to_lowercase();
+        let cleaned_trimmed = cleaned.strip_suffix('?').unwrap_or(&cleaned).trim();
         let mut cache_hit: Option<String> = None;
 
-        // 1. Lexical fallback (instant)
-        for (q, r, _) in &self.semantic_cache {
-            if cleaned == *q {
-                cache_hit = Some(r.clone());
+        for (q, r) in GREETINGS {
+            if cleaned == *q || cleaned_trimmed == *q {
+                cache_hit = Some((*r).to_string());
                 break;
-            }
-        }
-
-        // 2. Semantic lookup using the pre-computed embeddings
-        if cache_hit.is_none() && !query_embedding.iter().all(|&x| x == 0.0) {
-            for (q, r, emb) in &self.semantic_cache {
-                let sim = cosine_similarity(&query_embedding, emb);
-                if sim > 0.88 {
-                    tracing::info!(
-                        "Semantic cache hit for '{}' matching '{}' with similarity {:.4}",
-                        cleaned,
-                        q,
-                        sim
-                    );
-                    cache_hit = Some(r.clone());
-                    break;
-                }
             }
         }
 
@@ -450,7 +424,7 @@ impl Engine {
 
             // Stream response to the user with a dynamic token pacing animation
             if let Some(ref tx) = stream_tx {
-                // Clear the querying semantic memory spinner if it started
+                // Clear the querying spinner
                 let _ = tx.send("\x03".to_string());
                 for token in response.split_inclusive(char::is_whitespace) {
                     let _ = tx.send(token.to_string());
@@ -493,35 +467,9 @@ impl Engine {
         self.session
             .append(json!({"event": "user_input", "content": input}))?;
 
-        // Classify query complexity
-        let complexity_system_prompt = "You are a query complexity classifier. Classify the user query as 'complex' (if it requires planning, tools, coding, file access, bash commands, or multi-step execution) or 'simple' (if it is a greeting, basic question, simple explanation, or conversational prompt). Output ONLY 'complex' or 'simple' with no other text.";
-        let mut is_complex = false;
-        if let Ok(ModelResponse::EndTurn(classification)) = self
-            .model
-            .call(
-                complexity_system_prompt,
-                &[json!({"role": "user", "content": input})],
-                vec![],
-                None,
-            )
-            .await
-        {
-            if classification.trim().to_lowercase().contains("complex") {
-                is_complex = true;
-            }
-        }
-
-        if is_complex {
-            // Initialize the workspace scratchpad at the start of a complex turn
-            let scratchpad_header = format!(
-                "# Helix Scratchpad & Planning Log\n\n**Current Goal**: {}\n",
-                input
-            );
-            let _ = std::fs::write(".helix_scratchpad.md", &scratchpad_header);
-        } else {
-            // Ensure no stale scratchpad is left over
-            let _ = std::fs::remove_file(".helix_scratchpad.md");
-        }
+        // Ensure no stale scratchpad is left over at the start of the turn.
+        // It will be dynamically re-initialized in run_turn_inner if the agent calls any tools.
+        let _ = std::fs::remove_file(".helix_scratchpad.md");
 
         // 1. Retrieve relevant workspace memories and append them to the system prompt
         let mut final_system_prompt = system_prompt.to_string();
@@ -849,6 +797,14 @@ impl Engine {
                 }
 
                 ModelResponse::ToolCalls(calls, raw_msg) => {
+                    // Initialize the workspace scratchpad on the fly when the first tool is called
+                    if !std::path::Path::new(".helix_scratchpad.md").exists() {
+                        let scratchpad_header = format!(
+                            "# Helix Scratchpad & Planning Log\n\n**Current Goal**: {}\n",
+                            input
+                        );
+                        let _ = std::fs::write(".helix_scratchpad.md", &scratchpad_header);
+                    }
                     for call in &calls {
                         executed_tools.push(call.name.clone());
                     }
