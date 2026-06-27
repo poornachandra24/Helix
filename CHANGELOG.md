@@ -4,6 +4,13 @@ All notable changes to the Helix project will be documented in this file. The fo
 
 ---
 
+## [0.4.0](https://github.com/poornachandra24/Helix/compare/v0.3.0...v0.4.0) (2026-06-27)
+
+
+### Features
+
+* context window engineering, self-reflection engine, REPL autocomplete, and docs/CI overhaul ([#13](https://github.com/poornachandra24/Helix/issues/13)) ([5c6a72d](https://github.com/poornachandra24/Helix/commit/5c6a72da4bda7149aa13223d91878fcfe9aaca8a))
+
 ## [0.3.0](https://github.com/poornachandra24/Helix/compare/v0.2.0...v0.3.0) (2026-06-21)
 
 
