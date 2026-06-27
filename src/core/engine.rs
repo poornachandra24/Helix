@@ -38,6 +38,8 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot / (norm_a.sqrt() * norm_b.sqrt())
 }
 
+/// Pre-configured list of static conversational greetings and common starter questions
+/// mapped to direct, instant response text to avoid model invocation overhead.
 pub const GREETINGS: &[(&str, &str)] = &[
     ("hi", "Hello! How can I help you today?"),
     ("hello", "Hello! How can I help you today?"),
@@ -75,6 +77,8 @@ pub const GREETINGS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Main autonomous agent execution engine coordinating planning loops, tool dispatch,
+/// local healer retries, metrics recording, and semantic query projection adaptation.
 pub struct Engine {
     /// Boxed model adapter — swap providers at runtime without recompiling.
     pub model: Box<dyn ModelAdapter>,
@@ -129,16 +133,19 @@ impl Engine {
             crate::core::context::TokenEstimator::estimate_tool_descriptors(&descs);
     }
 
+    /// Bind a semantic memory engine to this execution context.
     pub fn with_memory(mut self, memory: crate::memory::HelixMemoryEngine) -> Self {
         self.memory = Some(memory);
         self
     }
 
+    /// Bind a metrics collector to log session stats to disk.
     pub fn with_metrics(mut self, collector: MetricsCollector) -> Self {
         self.metrics = Some(collector);
         self
     }
 
+    /// Bind a SONA self-optimizing engine to projection-align memory queries.
     pub fn with_sona(mut self, sona: SonaEngine) -> Self {
         self.sona = Some(Arc::new(sona));
         self
