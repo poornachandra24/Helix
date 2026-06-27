@@ -15,7 +15,47 @@ Helix implements an offline, high-performance semantic memory store to persist a
 
 ---
 
-## 2. Memory Subsystem Data Flow
+## 2. Helix Knowledge Framework: Procedural, Episodic, and Long-Term Knowledge
+
+Helix structures its intelligence and grounding layers around three distinct forms of knowledge representation:
+
+```mermaid
+graph TD
+    subgraph Procedural Knowledge
+        SC[Self-Correction Loop] --> SP[Scratchpad: .helix_scratchpad.md]
+        SP --> ToolExec[Sandboxed Tool Execution]
+    end
+
+    subgraph Episodic Knowledge
+        History[Active Chat Turns] --> PMR[Post-Mortem Reflection Summary]
+    end
+
+    subgraph Long-Term Knowledge
+        PMR --> SQLite[SQLite Metadata Index]
+        PMR --> TVec[turbovec Vector Store]
+        SQLite & TVec --> Retrieval[Hybrid BM25 + Vector Search]
+        Retrieval --> SystemPrompt[Context Injection in Next Session]
+    end
+```
+
+### 2.1 Procedural Knowledge (Execution & Correction)
+Procedural knowledge governs *how* the agent interacts with the workspace and rectifies execution errors in real-time.
+*   **Self-Correction & Planning**: Driven by the intermediate planning and correction loop in `engine.rs`. When a tool execution fails, the engine analyzes the failure to determine the **Current State**, **Target State**, and the **Gap/Strategy** to resolve it.
+*   **Dynamic Grounding**: This planning state is written to the local `.helix_scratchpad.md` workspace file, which is fed back into the LLM system prompt at each step. This keeps the agent's execution model grounded and prevents looping or repetitive errors during the turn.
+
+### 2.2 Episodic Knowledge (Session Summarization)
+Episodic knowledge captures the *history of interactions* as distinct episodes of work.
+*   **Post-Mortem Session Reflection**: Rather than raw logging, when a REPL session ends (or `/clear` is called), Helix initiates an autonomous LLM turn to synthesize a structured Markdown summary of the entire session history.
+*   **Structured Metadata**: The summary captures goals met, technical decisions made (e.g. implementation details), and outstanding issues to resolve next.
+
+### 2.3 Long-Term Knowledge (Recall & Application)
+Long-term knowledge provides *retrospective continuity* across multiple programming sessions.
+*   **Vectorization & Indexing**: The episodic post-mortem summaries are saved as physical files under `<data_dir>/memory/sessions/` and indexed using `fastembed-rs` embeddings (384 dimensions) into the `turbovec` index and SQLite metadata database.
+*   **Hybrid Context Retrieval**: When starting a subsequent session in the same workspace, Helix queries the long-term store using Reciprocal Rank Fusion (RRF) combining semantic vector queries with lexical BM25 search. The retrieved reflection summaries are injected directly into the LLM's system prompt, allowing the agent to inherit previous learnings, avoid repeating past troubleshooting steps, and build directly on top of past accomplishments.
+
+---
+
+## 3. Memory Subsystem Data Flow
 
 The diagram below details the data flow during query search and turn-level storage:
 
@@ -48,7 +88,7 @@ graph TD
 
 ---
 
-## 3. Temporal Sequence Diagram
+## 4. Temporal Sequence Diagram
 
 This sequence diagram displays the step-by-step operations executed during a standard user interaction turn in the REPL:
 
@@ -56,63 +96,82 @@ This sequence diagram displays the step-by-step operations executed during a sta
 sequenceDiagram
     autonumber
     actor User as User / REPL
-    participant Engine as src/engine.rs (Engine)
-    participant Memory as src/memory.rs (HelixMemoryEngine)
-    participant fastembed as fastembed (ONNX Embedder)
-    participant turbovec as turbovec (Vector Index)
-    participant SQLite as SQLite Database
-    participant LLM as Active LLM Model
+    participant Engine as src/core/engine.rs (Engine)
+    participant Scratchpad as .helix_scratchpad.md
+    participant Memory as src/memory/mod.rs (HelixMemoryEngine)
+    participant BGE as fastembed-rs (BGE-small-en ONNX)
+    participant TVec as turbovec (4-bit TurboQuant Index)
+    participant SQLite as SQLite DB (FTS5 BM25 table)
+    participant LLM as LLM Provider (Cloud/Local)
 
-    User->>Engine: Send prompt / input turn
+    Note over User, LLM: STARTUP / HYBRID RETRIEVAL PHASE
+    User->>Engine: Input Query
     activate Engine
-    
-    %% Retrieval Hook
-    Engine->>Memory: search(input, workspace_path, limit=5)
+    Engine->>Memory: search(query, workspace_path, limit)
     activate Memory
-    Memory->>fastembed: embed(input)
-    fastembed-->>Memory: Return query vector
     
-    Memory->>SQLite: Get IDs matching active workspace
-    SQLite-->>Memory: Return sqlite_ids
-    
-    Memory->>Memory: Filter allowed_ids (exist in turbovec)
-    
-    Memory->>turbovec: search_with_allowlist(query_vec, allowed_ids)
-    turbovec-->>Memory: Return matching vector IDs & scores
-    
-    Memory->>SQLite: Get text for matching IDs
-    SQLite-->>Memory: Return text snippets
-    
+    %% Semantic Embeddings
+    Memory->>BGE: embed(query)
+    BGE-->>Memory: 384-dimensional query vector
+
+    %% Semantic Search Pathway
+    Memory->>SQLite: Get SQLite IDs in workspace_path (Workspace Isolation)
+    SQLite-->>Memory: Allowed IDs list
+    Memory->>TVec: search_with_allowlist(query_vec, allowed_ids)
+    Note over TVec: SIMD-accelerated Cosine similarity on 4-bit quantized vectors
+    TVec-->>Memory: Semantic Matches (ID + Cosine Score)
+
+    %% Lexical Search Pathway
+    Memory->>SQLite: Lexical full-text query (BM25 match)
+    SQLite-->>Memory: Lexical Matches (ID + BM25 Score)
+
+    %% RRF Fusion
+    Note over Memory: Reciprocal Rank Fusion (RRF) combines & ranks matches
+    Memory->>SQLite: Retrieve full text for top RRF ranked IDs
+    SQLite-->>Memory: Memory matches content
     Memory-->>Engine: Return Vec<MemoryMatch>
     deactivate Memory
 
-    Engine->>Engine: Enrich system prompt with retrieved memories
+    Note over User, LLM: TURN EXECUTION & ACTIVE GROUNDING
+    alt Query is Complex
+        Engine->>Scratchpad: Read active plan/goals
+        Scratchpad-->>Engine: Plan context
+    end
+    Engine->>Engine: Enrich LLM system prompt (History + Memories + Scratchpad)
+    Engine->>LLM: Stream prompt / request action
+    LLM-->>Engine: Content Stream / Tool Call Delta
     
-    %% Turn Execution
-    Engine->>LLM: Send turn (enriched system prompt + input)
-    LLM-->>Engine: Return turn response text
-    
-    %% Save Memory Hook
-    Engine->>Memory: insert("User: ... \nAssistant: ...", workspace_path)
-    activate Memory
-    Memory->>SQLite: Insert metadata (text, workspace_path)
-    SQLite-->>Memory: Return row_id
-    
-    Memory->>fastembed: embed(memory_text)
-    fastembed-->>Memory: Return embedding vector
-    
-    Memory->>turbovec: add_with_ids(vector, row_id)
-    Memory->>Memory: persist() index to disk
-    Memory-->>Engine: Return Ok(())
-    deactivate Memory
+    alt Tool Execution Failure (Self-Correction)
+        Note over Engine: Intercept error before next step
+        Engine->>LLM: Reflection Prompt (Current/Target State, Gap/Strategy)
+        LLM-->>Engine: JSON Reflection Object
+        Engine->>Scratchpad: Write updated plan to .helix_scratchpad.md
+        Engine->>User: Stream cyan "▼ Thinking Process" telemetry
+    end
 
-    Engine-->>User: Return response to REPL
+    Note over User, LLM: SESSION EXIT / EPISODIC CONSOLIDATION
+    User->>Engine: Exit Command (/exit or /clear)
+    Engine->>LLM: Call post-mortem prompt with entire session transcript
+    LLM-->>Engine: Structured Markdown Session Reflection Summary
+    Engine->>User: Save summary to <data_dir>/memory/sessions/
+    
+    %% Long-term persistence
+    Engine->>Memory: insert(summary_text, workspace_path)
+    activate Memory
+    Memory->>SQLite: Insert metadata & index in FTS5 table
+    SQLite-->>Memory: row_id
+    Memory->>BGE: embed(summary_text)
+    BGE-->>Memory: embedding vector
+    Memory->>TVec: add_with_ids(vector, row_id)
+    Memory->>Memory: Persist turbovec index (.tvim) & SQLite DB (.db) to disk
+    Memory-->>Engine: Ok(())
+    deactivate Memory
     deactivate Engine
 ```
 
 ---
 
-## 4. Memory Footprint and Resource Verification
+## 5. Memory Footprint and Resource Verification
 
 Helix is optimized to maintain a highly compact memory profile suitable for resource-constrained environments (such as a 256 MiB container limit).
 
@@ -150,7 +209,7 @@ cat /proc/$PID/status | grep -E "VmRSS|VmSize|VmPeak|Threads"
 
 ---
 
-## 5. Lexical & Semantic Hybrid Search (BM25 + Vector)
+## 6. Lexical & Semantic Hybrid Search (BM25 + Vector)
 
 To match exact technical vocabulary (such as function names, API keys, error codes, and config tags) that dense vector embeddings might dilute, Helix implements a hybrid retrieval model:
 
@@ -160,7 +219,7 @@ To match exact technical vocabulary (such as function names, API keys, error cod
 
 ---
 
-## 6. Post-Mortem Reflective Memory
+## 7. Post-Mortem Reflective Memory
 
 Upon termination of a REPL session (via `/exit` or normal interrupt), the harness triggers an autonomous compilation pipeline:
 

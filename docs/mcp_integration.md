@@ -53,6 +53,25 @@ sequenceDiagram
 
 ---
 
+## Dynamic Registration vs. Context Window Injection
+
+Understanding how tools flow from an external MCP server into the LLM context window is critical for managing performance and token budgets:
+
+1.  **Handshake & Discovery (Dynamic Registration)**:
+    -   On startup or configuration hot-reload, Helix reads `mcp_config.json`, spawns the listed server processes (via `stdio` piping), and performs the initialization handshake.
+    -   Helix sends a `tools/list` request to each server.
+    -   The server returns the JSON Schema definitions for all available tools.
+    -   Helix wraps these definitions in a dynamic Rust `dyn Tool` interface and stores them in the memory-bound `ToolRegistry`. At this stage, the tools are **registered** but do not consume any model context space.
+2.  **Context Window Injection**:
+    -   When a prompt turn starts, Helix dynamically fetches the allowed tools from the `ToolRegistry`.
+    -   Helix serializes the parameters and descriptions of these tools into the standard JSON schemas expected by the LLM (under the `tools` payload argument).
+    -   Once injected, these schemas occupy actual slots inside the active **LLM Context Window**.
+3.  **The Critical Distinction**:
+    -   **Registered Tools**: Sit passively in memory and run as local subprocesses. They have a zero-token footprint on the LLM.
+    -   **Context-Injected Tools**: Actively consumed by the LLM during inference. They directly exhaust the model's token limit. Therefore, optimizing tool descriptions and schema sizing is a critical task in Context Window Engineering.
+
+---
+
 ## Configuration
 
 Helix looks for an `mcp_config.json` configuration file in the following order of precedence:
