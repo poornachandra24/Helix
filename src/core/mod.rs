@@ -8,6 +8,7 @@
 //! - [`ContextManager`]: Handles active memory/message token budgets and compactions.
 //! - [`MetricsCollector`]: Records step execution latencies, tool call successes, and token costs.
 //! - [`Session`]: Tracks historical chats, file targets, and database storage state.
+//! - [`TelemetryManager`]: OpenTelemetry tracing manager backed by Pydantic Logfire with fine-tuning signal capture.
 
 pub mod context;
 

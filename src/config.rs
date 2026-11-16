@@ -280,7 +280,7 @@ pub fn get_data_dir() -> Result<PathBuf> {
     Ok(temp)
 }
 
-/// Normalizes any Ollama Cloud providers to the official OpenAI-compatible endpoint (https://ollama.com/v1).
+/// Normalizes any Ollama Cloud providers to the official OpenAI-compatible endpoint (<https://ollama.com/v1>).
 pub fn normalize_ollama_cloud_providers(config: &mut AppConfig) -> bool {
     let mut modified = false;
     for p in &mut config.providers {
