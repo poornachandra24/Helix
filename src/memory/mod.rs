@@ -30,6 +30,7 @@ pub struct HelixMemoryEngine {
     pub db: Connection,
     embedder: Embedder,
     index_path: std::path::PathBuf,
+    embedding_cache: std::collections::HashMap<String, Vec<f32>>,
 }
 
 impl HelixMemoryEngine {
@@ -113,6 +114,7 @@ impl HelixMemoryEngine {
             db,
             embedder,
             index_path,
+            embedding_cache: std::collections::HashMap::new(),
         })
     }
 
@@ -124,26 +126,38 @@ impl HelixMemoryEngine {
     }
 
     /// Embed a single text string using fastembed (or mock deterministic embedder during test).
+    /// Results are cached in memory to avoid redundant ONNX model evaluations.
     pub fn embed_text(&mut self, text: &str) -> anyhow::Result<Vec<f32>> {
-        match &mut self.embedder {
+        if let Some(cached) = self.embedding_cache.get(text) {
+            return Ok(cached.clone());
+        }
+
+        let vector = match &mut self.embedder {
             Embedder::Real(emb) => {
                 let embeddings = emb.embed(vec![text], None)?;
                 if embeddings.is_empty() {
                     anyhow::bail!("Failed to generate embedding");
                 }
-                Ok(embeddings[0].clone())
+                embeddings[0].clone()
             }
             Embedder::Mock => {
                 #[cfg(test)]
                 {
-                    Ok(mock_embed(text))
+                    mock_embed(text)
                 }
                 #[cfg(not(test))]
                 {
                     anyhow::bail!("Mock embedder is not available in production builds");
                 }
             }
+        };
+
+        if self.embedding_cache.len() >= 512 {
+            self.embedding_cache.clear();
         }
+        self.embedding_cache
+            .insert(text.to_string(), vector.clone());
+        Ok(vector)
     }
 
     /// Insert a memory item: generates an embedding, stores metadata in SQLite,

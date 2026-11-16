@@ -73,6 +73,12 @@ pub struct AppConfig {
     /// Optional user-defined thinking level for reasoning models.
     #[serde(default)]
     pub thinking_level: Option<String>,
+    /// Enable OpenTelemetry tracing export to Logfire. Default: false.
+    #[serde(default)]
+    pub enable_telemetry: bool,
+    /// Saved Logfire API write token. Reused across sessions until edited.
+    #[serde(default)]
+    pub logfire_token: Option<String>,
 }
 
 impl AppConfig {
@@ -208,9 +214,15 @@ pub fn get_config_dir() -> Result<PathBuf> {
             return Ok(PathBuf::from(val).join("config"));
         }
     }
-    let proj_dirs = ProjectDirs::from("com", "helix", "helix")
-        .context("Could not determine config directory")?;
-    Ok(proj_dirs.config_dir().to_path_buf())
+    if let Some(proj_dirs) = ProjectDirs::from("com", "helix", "helix") {
+        let dir = proj_dirs.config_dir().to_path_buf();
+        if dir.exists() || fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    let temp = std::env::temp_dir().join("helix_config");
+    let _ = fs::create_dir_all(&temp);
+    Ok(temp)
 }
 
 pub fn get_state_dir() -> Result<PathBuf> {
@@ -220,12 +232,18 @@ pub fn get_state_dir() -> Result<PathBuf> {
             return Ok(PathBuf::from(val).join("state"));
         }
     }
-    let proj_dirs = ProjectDirs::from("com", "helix", "helix")
-        .context("Could not determine state directory")?;
-    Ok(proj_dirs
-        .state_dir()
-        .unwrap_or_else(|| proj_dirs.data_dir())
-        .to_path_buf())
+    if let Some(proj_dirs) = ProjectDirs::from("com", "helix", "helix") {
+        let dir = proj_dirs
+            .state_dir()
+            .unwrap_or_else(|| proj_dirs.data_dir())
+            .to_path_buf();
+        if dir.exists() || fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    let temp = std::env::temp_dir().join("helix_state");
+    let _ = fs::create_dir_all(&temp);
+    Ok(temp)
 }
 
 pub fn get_data_dir() -> Result<PathBuf> {
@@ -235,18 +253,170 @@ pub fn get_data_dir() -> Result<PathBuf> {
             return Ok(PathBuf::from(val).join("data"));
         }
     }
-    let proj_dirs =
-        ProjectDirs::from("com", "helix", "helix").context("Could not determine data directory")?;
-    Ok(proj_dirs.data_dir().to_path_buf())
+    if let Some(proj_dirs) = ProjectDirs::from("com", "helix", "helix") {
+        let dir = proj_dirs.data_dir().to_path_buf();
+        if dir.exists() || fs::create_dir_all(&dir).is_ok() {
+            return Ok(dir);
+        }
+    }
+    let temp = std::env::temp_dir().join("helix_data");
+    let _ = fs::create_dir_all(&temp);
+    Ok(temp)
+}
+
+/// Normalizes any Ollama Cloud providers to the official OpenAI-compatible endpoint (https://ollama.com/v1).
+pub fn normalize_ollama_cloud_providers(config: &mut AppConfig) -> bool {
+    let mut modified = false;
+    for p in &mut config.providers {
+        let is_ollama_cloud =
+            p.name.eq_ignore_ascii_case("Ollama Cloud") || p.base_url.contains("ollama.com");
+        if is_ollama_cloud {
+            if p.api_format != ApiFormat::OpenAiCompatible {
+                p.api_format = ApiFormat::OpenAiCompatible;
+                modified = true;
+            }
+            let base = p.base_url.trim_end_matches('/');
+            if base == "https://ollama.com"
+                || base == "http://ollama.com"
+                || base == "https://ollama.com/api"
+                || base == "http://ollama.com/api"
+                || base.ends_with("/api")
+                || !base.ends_with("/v1")
+            {
+                p.base_url = "https://ollama.com/v1".to_string();
+                modified = true;
+            }
+            if p.api_key.is_none()
+                && let Ok(key) = std::env::var("OLLAMA_API_KEY")
+                && !key.trim().is_empty()
+            {
+                p.api_key = Some(key.trim().to_string());
+                modified = true;
+            }
+        }
+    }
+    modified
 }
 
 pub fn load_config() -> Result<AppConfig> {
     let config_file = get_config_dir()?.join("config.toml");
     if config_file.exists() {
         let content = fs::read_to_string(&config_file)?;
-        if let Ok(config) = toml::from_str(&content) {
+        if let Ok(mut config) = toml::from_str::<AppConfig>(&content) {
+            if normalize_ollama_cloud_providers(&mut config) {
+                let _ = config.save();
+            }
             return Ok(config);
         }
+    }
+
+    use std::io::IsTerminal;
+    let is_terminal = std::io::stdin().is_terminal();
+
+    // Check for environment-based configuration overrides (vital for Harbor/CI/headless benchmarks)
+    let env_openai = std::env::var("OPENAI_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_openrouter = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_anthropic = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_ollama_cloud = std::env::var("OLLAMA_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_model = std::env::var("HELIX_MODEL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_base_url = std::env::var("HELIX_API_BASE")
+        .or_else(|_| std::env::var("OPENAI_BASE_URL"))
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let is_non_interactive = !is_terminal
+        || std::env::var("NON_INTERACTIVE").is_ok()
+        || std::env::var("HELIX_YES").is_ok()
+        || std::env::var("CI").is_ok();
+
+    if is_non_interactive
+        || env_openai.is_some()
+        || env_openrouter.is_some()
+        || env_anthropic.is_some()
+        || env_ollama_cloud.is_some()
+        || env_base_url.is_some()
+    {
+        let (provider_name, base_url, api_key, default_model, format) =
+            if let Some(base) = env_base_url {
+                let key = env_openai
+                    .or(env_openrouter)
+                    .or(env_anthropic)
+                    .or(env_ollama_cloud);
+                (
+                    "Custom",
+                    base,
+                    key,
+                    env_model.unwrap_or_else(|| "gpt-4o".to_string()),
+                    ApiFormat::OpenAiCompatible,
+                )
+            } else if let Some(key) = env_ollama_cloud {
+                (
+                    "Ollama Cloud",
+                    "https://ollama.com/v1".to_string(),
+                    Some(key),
+                    env_model.unwrap_or_else(|| "gemma4:31b".to_string()),
+                    ApiFormat::OpenAiCompatible,
+                )
+            } else if let Some(key) = env_openrouter {
+                (
+                    "OpenRouter",
+                    "https://openrouter.ai/api/v1".to_string(),
+                    Some(key),
+                    env_model.unwrap_or_else(|| "anthropic/claude-3.7-sonnet".to_string()),
+                    ApiFormat::OpenAiCompatible,
+                )
+            } else if let Some(key) = env_openai {
+                (
+                    "OpenAI",
+                    "https://api.openai.com/v1".to_string(),
+                    Some(key),
+                    env_model.unwrap_or_else(|| "gpt-4o".to_string()),
+                    ApiFormat::OpenAiCompatible,
+                )
+            } else if let Some(key) = env_anthropic {
+                (
+                    "OpenRouter",
+                    "https://openrouter.ai/api/v1".to_string(),
+                    Some(key),
+                    env_model.unwrap_or_else(|| "anthropic/claude-3.7-sonnet".to_string()),
+                    ApiFormat::OpenAiCompatible,
+                )
+            } else {
+                (
+                    "Ollama (Local)",
+                    "http://localhost:11434".to_string(),
+                    None,
+                    env_model.unwrap_or_else(|| "llama3.2".to_string()),
+                    ApiFormat::OllamaNative,
+                )
+            };
+
+        let auto_config = AppConfig {
+            providers: vec![Provider {
+                name: provider_name.to_string(),
+                base_url,
+                api_key,
+                api_format: format,
+            }],
+            active_provider: provider_name.to_string(),
+            active_model: default_model,
+            context_window_override: None,
+            response_headroom: Some(2048),
+            sandbox_mode: SandboxMode::Local,
+            thinking_level: None,
+            enable_telemetry: false,
+            logfire_token: None,
+        };
+        return Ok(auto_config);
     }
 
     use owo_colors::OwoColorize;
@@ -274,6 +444,13 @@ const PROVIDER_TEMPLATES: &[(&str, &str, bool, &str, ApiFormat)] = &[
         false,
         "llama3.2",
         ApiFormat::OllamaNative,
+    ),
+    (
+        "Ollama Cloud",
+        "https://ollama.com/v1",
+        true,
+        "gemma4:31b",
+        ApiFormat::OpenAiCompatible,
     ),
     (
         "OpenRouter",
@@ -383,6 +560,8 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
         response_headroom: None,
         sandbox_mode: SandboxMode::Local,
         thinking_level: None,
+        enable_telemetry: false,
+        logfire_token: None,
     });
 
     loop {
@@ -413,6 +592,19 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
                     .response_headroom
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "none".to_string())
+            ),
+            format!(
+                "Configure Logfire telemetry (currently: {}, token: {})",
+                if config.enable_telemetry {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                if config.logfire_token.is_some() {
+                    "saved"
+                } else {
+                    "none"
+                }
             ),
             "Exit configuration".to_string(),
         ];
@@ -609,26 +801,35 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
                 validate_provider_connectivity(&provider);
             }
             2 => {
-                let modes = vec!["local", "docker", "wasm", "ssh", "< Back to main menu"];
+                let modes = vec![
+                    "local",
+                    "docker",
+                    "wasm",
+                    "ssh",
+                    "worktree",
+                    "< Back to main menu",
+                ];
                 let default_sel = match config.sandbox_mode {
                     SandboxMode::Local => 0,
                     SandboxMode::Docker => 1,
                     SandboxMode::Wasm => 2,
                     SandboxMode::SSH => 3,
+                    SandboxMode::Worktree => 4,
                 };
                 let selection = Select::with_theme(&ColorfulTheme::default())
                     .with_prompt("Select Sandbox Execution Mode")
                     .default(default_sel)
                     .items(&modes)
                     .interact()?;
-                if selection == 4 {
+                if selection == 5 {
                     continue;
                 }
                 config.sandbox_mode = match selection {
                     0 => SandboxMode::Local,
                     1 => SandboxMode::Docker,
                     2 => SandboxMode::Wasm,
-                    _ => SandboxMode::SSH,
+                    3 => SandboxMode::SSH,
+                    _ => SandboxMode::Worktree,
                 };
                 config.save()?;
                 println!("\nSandbox mode updated to {:?}", config.sandbox_mode);
@@ -727,6 +928,109 @@ pub fn interactive_setup(existing: Option<AppConfig>) -> Result<AppConfig> {
                 config.save()?;
                 println!("\nResponse headroom updated!");
             }
+            6 => {
+                let tele_menu = vec![
+                    format!(
+                        "Toggle telemetry (currently: {})",
+                        if config.enable_telemetry {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        }
+                    ),
+                    format!(
+                        "Set / Update Logfire token (currently: {})",
+                        if let Some(ref t) = config.logfire_token {
+                            let masked = if t.len() > 8 {
+                                format!("{}***{}", &t[..4], &t[t.len() - 4..])
+                            } else {
+                                "***".to_string()
+                            };
+                            format!("saved [{}]", masked)
+                        } else {
+                            "not set".to_string()
+                        }
+                    ),
+                    "< Back to main menu".to_string(),
+                ];
+
+                let tele_choice = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Logfire Observability & Tracing")
+                    .default(0)
+                    .items(&tele_menu)
+                    .interact()?;
+
+                match tele_choice {
+                    0 => {
+                        let new_state = !config.enable_telemetry;
+                        if new_state && config.logfire_token.is_none() {
+                            let token_input: String =
+                                Password::with_theme(&ColorfulTheme::default())
+                                    .with_prompt("Enter your Logfire write token (empty to cancel)")
+                                    .allow_empty_password(true)
+                                    .interact()?;
+                            let trimmed = token_input.trim();
+                            if !trimmed.is_empty() {
+                                config.logfire_token = Some(trimmed.to_string());
+                                config.enable_telemetry = true;
+                                if let Some(mgr) = crate::core::TelemetryManager::global() {
+                                    let _ = mgr.enable(trimmed);
+                                }
+                                config.save()?;
+                                println!("\n✔ Logfire token saved. Telemetry is now enabled.");
+                            } else {
+                                println!("\nTelemetry remains disabled (token is required).");
+                            }
+                        } else {
+                            config.enable_telemetry = new_state;
+                            if let Some(mgr) = crate::core::TelemetryManager::global() {
+                                if new_state {
+                                    if let Some(ref tok) = config.logfire_token {
+                                        let _ = mgr.enable(tok);
+                                    }
+                                } else {
+                                    let _ = mgr.disable();
+                                }
+                            }
+                            config.save()?;
+                            println!(
+                                "\n✔ Telemetry {}",
+                                if config.enable_telemetry {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                }
+                            );
+                        }
+                    }
+                    1 => {
+                        let token_input: String = Password::with_theme(&ColorfulTheme::default())
+                            .with_prompt("Enter new Logfire write token (empty to clear)")
+                            .allow_empty_password(true)
+                            .interact()?;
+                        let trimmed = token_input.trim();
+                        if trimmed.is_empty() {
+                            config.logfire_token = None;
+                            config.enable_telemetry = false;
+                            if let Some(mgr) = crate::core::TelemetryManager::global() {
+                                let _ = mgr.disable();
+                            }
+                            config.save()?;
+                            println!("\n✔ Logfire token cleared. Telemetry disabled.");
+                        } else {
+                            config.logfire_token = Some(trimmed.to_string());
+                            if config.enable_telemetry
+                                && let Some(mgr) = crate::core::TelemetryManager::global()
+                            {
+                                let _ = mgr.enable(trimmed);
+                            }
+                            config.save()?;
+                            println!("\n✔ Logfire token updated in config.");
+                        }
+                    }
+                    _ => {}
+                }
+            }
             _ => {
                 println!("Exiting configuration menu.");
                 break;
@@ -774,5 +1078,52 @@ pub fn switch_provider(
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_telemetry_config_defaults() {
+        let toml_str = r#"
+            active_provider = "Ollama"
+            active_model = "llama3.2"
+            providers = []
+        "#;
+        let config: AppConfig = toml::from_str(toml_str).expect("deserialize config");
+        assert!(
+            !config.enable_telemetry,
+            "Telemetry should be false by default"
+        );
+        assert_eq!(
+            config.logfire_token, None,
+            "Logfire token should be None by default"
+        );
+    }
+
+    #[test]
+    fn test_telemetry_config_persistence_roundtrip() {
+        let config = AppConfig {
+            providers: vec![],
+            active_provider: "Ollama".to_string(),
+            active_model: "llama3.2".to_string(),
+            context_window_override: None,
+            response_headroom: Some(2048),
+            sandbox_mode: SandboxMode::Local,
+            thinking_level: None,
+            enable_telemetry: true,
+            logfire_token: Some("logfire_test_token_12345".to_string()),
+        };
+
+        let serialized = toml::to_string(&config).expect("serialize config");
+        let deserialized: AppConfig = toml::from_str(&serialized).expect("deserialize config");
+
+        assert!(deserialized.enable_telemetry);
+        assert_eq!(
+            deserialized.logfire_token.as_deref(),
+            Some("logfire_test_token_12345")
+        );
     }
 }

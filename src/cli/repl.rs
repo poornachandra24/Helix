@@ -243,6 +243,10 @@ fn print_help() {
             "/optimize",
             "force SONA neural adaptation & parameter consolidation",
         ),
+        (
+            "/telemetry | /trace [on|off]",
+            "toggle Logfire OpenTelemetry tracing and token management",
+        ),
         ("/exit | /quit", "exit the REPL session"),
     ];
     for (cmd, desc) in general {
@@ -302,6 +306,14 @@ fn get_matching_commands_inline(input: &str, config: &config::AppConfig) -> Vec<
         (
             "/optimize".to_string(),
             "force SONA neural adaptation & parameter consolidation".to_string(),
+        ),
+        (
+            "/telemetry".to_string(),
+            "toggle Logfire OpenTelemetry tracing and token management".to_string(),
+        ),
+        (
+            "/trace".to_string(),
+            "toggle Logfire OpenTelemetry tracing (alias for /telemetry)".to_string(),
         ),
         ("/exit".to_string(), "exit the REPL session".to_string()),
     ];
@@ -432,63 +444,166 @@ fn get_matching_commands_inline(input: &str, config: &config::AppConfig) -> Vec<
         .collect()
 }
 
+fn redraw_input_line(prompt_width: usize, input: &str, cursor_pos: usize) {
+    print!("\r\x1b[{}C\x1b[K{}", prompt_width, input);
+    let dist_from_end = input.len().saturating_sub(cursor_pos);
+    if dist_from_end > 0 {
+        print!("\x1b[{}D", dist_from_end);
+    }
+    let _ = io::stdout().flush();
+}
+
+fn clear_suggestions_inline(prev_suggestions_printed: &mut bool) -> io::Result<()> {
+    if !*prev_suggestions_printed {
+        return Ok(());
+    }
+    print!("\x1b7\r\n\x1b[J\x1b8");
+    io::stdout().flush()?;
+    *prev_suggestions_printed = false;
+    Ok(())
+}
+
 fn render_suggestions_inline(
     input: &str,
     selected_index: Option<usize>,
     prev_suggestions_printed: &mut bool,
     prompt_width: usize,
+    cursor_pos: usize,
     config: &config::AppConfig,
 ) -> io::Result<()> {
-    // Clear from cursor position to end of screen (clears old suggestions)
-    print!("\x1b[J");
-    *prev_suggestions_printed = false;
-
     if !input.starts_with('/') {
+        if *prev_suggestions_printed {
+            clear_suggestions_inline(prev_suggestions_printed)?;
+        }
         return Ok(());
     }
 
     let matches = get_matching_commands_inline(input, config);
     if matches.is_empty() {
+        if *prev_suggestions_printed {
+            clear_suggestions_inline(prev_suggestions_printed)?;
+        }
         return Ok(());
     }
 
-    // Print suggestions
-    print!("\r\n");
+    let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let term_cols = term_cols as usize;
+
+    // Windowing: display at most 5 items at a time to prevent screen flooding & scrolling
+    const MAX_VISIBLE: usize = 5;
+    let total_matches = matches.len();
+    let selected = selected_index
+        .unwrap_or(0)
+        .min(total_matches.saturating_sub(1));
+
+    let start_idx = if selected >= MAX_VISIBLE {
+        selected + 1 - MAX_VISIBLE
+    } else {
+        0
+    };
+    let end_idx = (start_idx + MAX_VISIBLE).min(total_matches);
+    let visible_count = end_idx - start_idx;
+
+    let has_scroll_hint = total_matches > MAX_VISIBLE;
+    let total_lines = 2 + visible_count + if has_scroll_hint { 1 } else { 0 };
+
+    // Prevent scrolling desynchronization: ensure there are enough blank lines below
+    if let Ok((_c, current_row)) = crossterm::cursor::position() {
+        let available_below = (term_rows as usize).saturating_sub(current_row as usize + 1);
+        if available_below < total_lines {
+            let needed = total_lines - available_below;
+            for _ in 0..needed {
+                print!("\r\n");
+            }
+            print!("\x1b[{}A", needed);
+            let col = prompt_width + cursor_pos;
+            print!("\r\x1b[{}C", col);
+            let _ = io::stdout().flush();
+        }
+    }
+
+    // Save cursor position on the prompt line (DEC Save Cursor)
+    print!("\x1b7");
+
+    // Header
+    let header_title = "SUGGESTED HELIX SYSTEM COMMANDS";
+    let header_nav = if total_matches > 1 {
+        format!(
+            "({}/{} - use ↑/↓ to scroll, Tab to select)",
+            selected + 1,
+            total_matches
+        )
+    } else {
+        "(Tab to select)".to_string()
+    };
     print!(
-        "  {} {}\r\n",
-        style("SUGGESTED HELIX SYSTEM COMMANDS").cyan().bold(),
-        style("(use ↑/↓ keys to scroll, Enter/Tab to select)").dimmed()
+        "\r\n\x1b[2K  {} {}",
+        style(header_title).cyan().bold(),
+        style(header_nav).dimmed()
     );
-    print!("  {}\r\n", style("─".repeat(50)).dimmed());
-    for (i, (cmd, desc)) in matches.iter().enumerate() {
-        if Some(i) == selected_index {
+
+    // Separator
+    let sep_len = term_cols.saturating_sub(6).min(50);
+    print!("\r\n\x1b[2K  {}", style("─".repeat(sep_len)).dimmed());
+
+    // Render items strictly clamped to terminal width so lines never wrap
+    let max_cmd_len = 20;
+    let max_desc_len = term_cols.saturating_sub(max_cmd_len + 12).max(10);
+
+    for (i, (cmd, desc)) in matches[start_idx..end_idx].iter().enumerate() {
+        let global_idx = start_idx + i;
+        let is_selected = selected_index == Some(global_idx);
+
+        let truncated_desc = if desc.len() > max_desc_len {
+            format!("{}...", &desc[..max_desc_len.saturating_sub(3)])
+        } else {
+            desc.to_string()
+        };
+
+        if is_selected {
             print!(
-                "  {} {:22}  {}  {}\r\n",
+                "\r\n\x1b[2K  {} {:width$}  {}  {}",
                 style("▶").green().bold(),
                 style(cmd).green().bold(),
                 style("—").green(),
-                style(desc).green().bold()
+                style(&truncated_desc).green().bold(),
+                width = max_cmd_len
             );
         } else {
             print!(
-                "    {:22}  {}  {}\r\n",
+                "\r\n\x1b[2K    {:width$}  {}  {}",
                 style(cmd).cyan(),
                 style("—").color256(240),
-                style(desc).white()
+                style(&truncated_desc).white(),
+                width = max_cmd_len
             );
         }
     }
 
-    // Move cursor back up to the input line
-    let lines_to_move_up = 3 + matches.len();
-    print!("\x1b[{}A", lines_to_move_up);
-    // Carriage return to column 0
-    print!("\r");
-    // Move cursor right to prompt + input length
-    let col = prompt_width + input.len();
-    if col > 0 {
-        print!("\x1b[{}C", col);
+    // Scroll indicator footer if matches exceed window
+    if has_scroll_hint {
+        let more_above = start_idx > 0;
+        let more_below = end_idx < total_matches;
+        let hint = match (more_above, more_below) {
+            (true, true) => {
+                format!(
+                    "▲ {} more above | ▼ {} more below",
+                    start_idx,
+                    total_matches - end_idx
+                )
+            }
+            (true, false) => format!("▲ {} more above", start_idx),
+            (false, true) => format!("▼ {} more below", total_matches - end_idx),
+            _ => String::new(),
+        };
+        print!("\r\n\x1b[2K  {}", style(hint).dimmed());
     }
+
+    // Clear any extra residual lines from previous renders
+    print!("\x1b[J");
+
+    // Restore cursor position back to prompt input position (DEC Restore Cursor)
+    print!("\x1b8");
     io::stdout().flush()?;
     *prev_suggestions_printed = true;
 
@@ -523,7 +638,8 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
     let registered_skills = skill_reg.list_skills();
     let session = persistence::Session::new(resume_id.as_deref())?;
     let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
-    let mut tools = build_tool_registry(sandbox.clone(), data_dir.join("skills"));
+    let mut tools =
+        build_tool_registry(sandbox.clone(), data_dir.join("skills"), app_config.clone());
 
     // Initialize MCP tools without automatically registering them into the active tool registry
     let (mut _mcp_registry, mcp_tools) = init_mcp_tools().await?;
@@ -704,6 +820,16 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
     print!("\x1b[?2004h");
     let _ = io::stdout().flush();
 
+    let mut input_history: Vec<String> = Vec::new();
+    for msg in &engine.global_messages {
+        if msg["role"].as_str() == Some("user")
+            && let Some(c) = msg["content"].as_str()
+            && !c.trim().is_empty()
+        {
+            input_history.push(c.trim().to_string());
+        }
+    }
+
     loop {
         let msg_tokens: usize = engine
             .global_messages
@@ -723,8 +849,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         };
 
         let mut input = String::new();
+        let mut cursor_pos = 0;
         let mut prev_suggestions_printed = false;
         let mut selected_index: Option<usize> = None;
+        let mut history_nav_idx: Option<usize> = None;
+        let mut current_draft = String::new();
         let prompt_width = 18 + format!("{:.1}%", pct).len();
 
         print!(
@@ -758,11 +887,17 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                         {
                             match key_event.code {
                                 crossterm::event::KeyCode::Char('c') => {
-                                    print!("\r\n");
-                                    if prev_suggestions_printed {
-                                        print!("\x1b[J");
-                                        prev_suggestions_printed = false;
+                                    if !input.is_empty() {
+                                        clear_suggestions_inline(&mut prev_suggestions_printed)?;
+                                        input.clear();
+                                        cursor_pos = 0;
+                                        selected_index = None;
+                                        history_nav_idx = None;
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
+                                        continue;
                                     }
+                                    print!("\r\n");
+                                    clear_suggestions_inline(&mut prev_suggestions_printed)?;
                                     print!("\x1b[?2004l");
                                     let _ = io::stdout().flush();
 
@@ -790,21 +925,14 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                             print!("\x1b[?2004h");
                                             let _ = io::stdout().flush();
                                             print!(
-                                                "\r\x1b[K{} {} {} {} {}",
+                                                "\r\x1b[K{} {} {} {} ",
                                                 style("◆").cyan(),
                                                 style("helix").white().bold(),
                                                 style(format!("(ctx: {})", pct_color)).dimmed(),
                                                 style("›").blue().bold(),
-                                                input
                                             );
                                             io::stdout().flush()?;
-                                            render_suggestions_inline(
-                                                &input,
-                                                selected_index,
-                                                &mut prev_suggestions_printed,
-                                                prompt_width,
-                                                &app_config,
-                                            )?;
+                                            redraw_input_line(prompt_width, &input, cursor_pos);
                                         }
                                     }
                                     continue;
@@ -817,36 +945,101 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                     }
                                     continue;
                                 }
+                                crossterm::event::KeyCode::Char('u') => {
+                                    clear_suggestions_inline(&mut prev_suggestions_printed)?;
+                                    input.clear();
+                                    cursor_pos = 0;
+                                    selected_index = None;
+                                    history_nav_idx = None;
+                                    redraw_input_line(prompt_width, &input, cursor_pos);
+                                    continue;
+                                }
+                                crossterm::event::KeyCode::Char('a') => {
+                                    cursor_pos = 0;
+                                    redraw_input_line(prompt_width, &input, cursor_pos);
+                                    continue;
+                                }
+                                crossterm::event::KeyCode::Char('e') => {
+                                    cursor_pos = input.len();
+                                    redraw_input_line(prompt_width, &input, cursor_pos);
+                                    continue;
+                                }
                                 _ => {}
                             }
                         } else {
                             match key_event.code {
                                 crossterm::event::KeyCode::Char(c) => {
                                     selected_index = None;
-                                    input.push(c);
-                                    print!("{}", c);
-                                    io::stdout().flush()?;
+                                    history_nav_idx = None;
+                                    input.insert(cursor_pos, c);
+                                    cursor_pos += 1;
+                                    redraw_input_line(prompt_width, &input, cursor_pos);
                                     render_suggestions_inline(
                                         &input,
                                         selected_index,
                                         &mut prev_suggestions_printed,
                                         prompt_width,
+                                        cursor_pos,
                                         &app_config,
                                     )?;
                                 }
                                 crossterm::event::KeyCode::Backspace => {
                                     selected_index = None;
-                                    if !input.is_empty() {
-                                        input.pop();
-                                        print!("\x1b[1D \x1b[1D");
-                                        io::stdout().flush()?;
+                                    history_nav_idx = None;
+                                    if cursor_pos > 0 {
+                                        cursor_pos -= 1;
+                                        input.remove(cursor_pos);
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
                                         render_suggestions_inline(
                                             &input,
                                             selected_index,
                                             &mut prev_suggestions_printed,
                                             prompt_width,
+                                            cursor_pos,
                                             &app_config,
                                         )?;
+                                    }
+                                }
+                                crossterm::event::KeyCode::Delete => {
+                                    selected_index = None;
+                                    history_nav_idx = None;
+                                    if cursor_pos < input.len() {
+                                        input.remove(cursor_pos);
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
+                                        render_suggestions_inline(
+                                            &input,
+                                            selected_index,
+                                            &mut prev_suggestions_printed,
+                                            prompt_width,
+                                            cursor_pos,
+                                            &app_config,
+                                        )?;
+                                    }
+                                }
+                                crossterm::event::KeyCode::Left => {
+                                    if cursor_pos > 0 {
+                                        cursor_pos -= 1;
+                                        print!("\x1b[1D");
+                                        let _ = io::stdout().flush();
+                                    }
+                                }
+                                crossterm::event::KeyCode::Right => {
+                                    if cursor_pos < input.len() {
+                                        cursor_pos += 1;
+                                        print!("\x1b[1C");
+                                        let _ = io::stdout().flush();
+                                    }
+                                }
+                                crossterm::event::KeyCode::Home => {
+                                    if cursor_pos > 0 {
+                                        cursor_pos = 0;
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
+                                    }
+                                }
+                                crossterm::event::KeyCode::End => {
+                                    if cursor_pos < input.len() {
+                                        cursor_pos = input.len();
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
                                     }
                                 }
                                 crossterm::event::KeyCode::Down => {
@@ -864,9 +1057,21 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 selected_index,
                                                 &mut prev_suggestions_printed,
                                                 prompt_width,
+                                                cursor_pos,
                                                 &app_config,
                                             )?;
                                         }
+                                    } else if let Some(idx) = history_nav_idx {
+                                        if idx + 1 < input_history.len() {
+                                            let new_idx = idx + 1;
+                                            history_nav_idx = Some(new_idx);
+                                            input = input_history[new_idx].clone();
+                                        } else {
+                                            history_nav_idx = None;
+                                            input = current_draft.clone();
+                                        }
+                                        cursor_pos = input.len();
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
                                     }
                                 }
                                 crossterm::event::KeyCode::Up => {
@@ -890,9 +1095,23 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                                 selected_index,
                                                 &mut prev_suggestions_printed,
                                                 prompt_width,
+                                                cursor_pos,
                                                 &app_config,
                                             )?;
                                         }
+                                    } else if !input_history.is_empty() {
+                                        let new_idx = match history_nav_idx {
+                                            None => {
+                                                current_draft = input.clone();
+                                                input_history.len().saturating_sub(1)
+                                            }
+                                            Some(0) => 0,
+                                            Some(idx) => idx - 1,
+                                        };
+                                        history_nav_idx = Some(new_idx);
+                                        input = input_history[new_idx].clone();
+                                        cursor_pos = input.len();
+                                        redraw_input_line(prompt_width, &input, cursor_pos);
                                     }
                                 }
                                 crossterm::event::KeyCode::Tab => {
@@ -900,32 +1119,36 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                         let matches =
                                             get_matching_commands_inline(&input, &app_config);
                                         if !matches.is_empty() {
-                                            let idx = selected_index.unwrap_or(0);
-                                            if idx < matches.len() {
-                                                let first_match = &matches[idx].0;
-                                                for _ in 0..input.len() {
-                                                    print!("\x1b[1D \x1b[1D");
-                                                }
-                                                input = first_match.to_string();
-                                                if input == "/resume"
-                                                    || input == "/use"
-                                                    || input == "/memory"
-                                                    || input == "/thinking"
-                                                {
-                                                    input.push(' ');
-                                                }
-                                                selected_index = None;
-                                                print!("{}", input);
-                                                io::stdout().flush()?;
-                                                render_suggestions_inline(
-                                                    &input,
-                                                    selected_index,
-                                                    &mut prev_suggestions_printed,
-                                                    prompt_width,
-                                                    &app_config,
-                                                )?;
+                                            let idx = selected_index
+                                                .unwrap_or(0)
+                                                .min(matches.len().saturating_sub(1));
+                                            let mut chosen = matches[idx].0.clone();
+                                            if chosen == "/resume"
+                                                || chosen == "/use"
+                                                || chosen == "/memory"
+                                                || chosen == "/thinking"
+                                            {
+                                                chosen.push(' ');
                                             }
+                                            input = chosen;
+                                            cursor_pos = input.len();
+                                            selected_index = None;
+                                            redraw_input_line(prompt_width, &input, cursor_pos);
+                                            render_suggestions_inline(
+                                                &input,
+                                                selected_index,
+                                                &mut prev_suggestions_printed,
+                                                prompt_width,
+                                                cursor_pos,
+                                                &app_config,
+                                            )?;
                                         }
+                                    }
+                                }
+                                crossterm::event::KeyCode::Esc => {
+                                    if prev_suggestions_printed {
+                                        clear_suggestions_inline(&mut prev_suggestions_printed)?;
+                                        selected_index = None;
                                     }
                                 }
                                 crossterm::event::KeyCode::Enter => {
@@ -934,17 +1157,10 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                                             let matches =
                                                 get_matching_commands_inline(&input, &app_config);
                                             if idx < matches.len() {
-                                                let chosen = &matches[idx].0;
-                                                for _ in 0..input.len() {
-                                                    print!("\x1b[1D \x1b[1D");
-                                                }
-                                                input = chosen.to_string();
-                                                print!("{}", input);
-                                                io::stdout().flush()?;
+                                                input = matches[idx].0.clone();
                                             }
                                         }
-                                        print!("\x1b[J");
-                                        io::stdout().flush()?;
+                                        clear_suggestions_inline(&mut prev_suggestions_printed)?;
                                     }
                                     print!("\r\n");
                                     break;
@@ -954,15 +1170,17 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                         }
                     }
                     crossterm::event::Event::Paste(text) => {
-                        input.push_str(&text);
-                        print!("{}", text);
-                        io::stdout().flush()?;
+                        input.insert_str(cursor_pos, &text);
+                        cursor_pos += text.len();
                         selected_index = None;
+                        history_nav_idx = None;
+                        redraw_input_line(prompt_width, &input, cursor_pos);
                         render_suggestions_inline(
                             &input,
                             selected_index,
                             &mut prev_suggestions_printed,
                             prompt_width,
+                            cursor_pos,
                             &app_config,
                         )?;
                     }
@@ -975,6 +1193,11 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
         let _ = io::stdout().flush();
 
         let trimmed = input.trim();
+        if !trimmed.is_empty() {
+            if input_history.last().map(|s| s.as_str()) != Some(trimmed) {
+                input_history.push(trimmed.to_string());
+            }
+        }
 
         match trimmed {
             "exit" | "quit" | "/exit" | "/quit" => {
@@ -1453,6 +1676,169 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             continue;
         }
 
+        // ── /telemetry | /trace ───────────────────────────────
+        if trimmed == "/telemetry"
+            || trimmed == "/trace"
+            || trimmed == "/tracing"
+            || trimmed.starts_with("/telemetry ")
+            || trimmed.starts_with("/trace ")
+            || trimmed.starts_with("/tracing ")
+        {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            let subcmd = parts.get(1).copied().unwrap_or("");
+
+            match subcmd {
+                "on" | "enable" => {
+                    let existing_token = app_config
+                        .logfire_token
+                        .clone()
+                        .or_else(|| std::env::var("LOGFIRE_TOKEN").ok());
+
+                    if let Some(tok) = existing_token {
+                        if let Some(mgr) = crate::core::TelemetryManager::global() {
+                            match mgr.enable(&tok) {
+                                Ok(()) => {
+                                    app_config.enable_telemetry = true;
+                                    let _ = app_config.save();
+                                    println!(
+                                        "{}",
+                                        style("✔ Telemetry enabled using saved Logfire token. Traces will be collected.")
+                                            .green()
+                                    );
+                                }
+                                Err(e) => {
+                                    println!(
+                                        "{}",
+                                        style(format!("✘ Failed to enable telemetry: {}", e)).red()
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        println!(
+                            "{}",
+                            style(
+                                "Logfire telemetry requires an API write token for the first time."
+                            )
+                            .yellow()
+                        );
+                        print!("Enter your Logfire token (or press Enter to cancel): ");
+                        let _ = io::stdout().flush();
+                        let mut line = String::new();
+                        let _ = io::stdin().read_line(&mut line);
+                        let token_input = line.trim();
+
+                        if !token_input.is_empty() {
+                            if let Some(mgr) = crate::core::TelemetryManager::global() {
+                                match mgr.enable(token_input) {
+                                    Ok(()) => {
+                                        app_config.logfire_token = Some(token_input.to_string());
+                                        app_config.enable_telemetry = true;
+                                        let _ = app_config.save();
+                                        println!(
+                                            "{}",
+                                            style("✔ Logfire token saved to config. Telemetry is now enabled.")
+                                                .green()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "{}",
+                                            style(format!("✘ Failed to initialize Logfire: {}", e))
+                                                .red()
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            println!(
+                                "{}",
+                                style("Telemetry remains disabled (token is required).").yellow()
+                            );
+                        }
+                    }
+                }
+                "off" | "disable" => {
+                    if let Some(mgr) = crate::core::TelemetryManager::global() {
+                        let _ = mgr.disable();
+                    }
+                    app_config.enable_telemetry = false;
+                    let _ = app_config.save();
+                    println!("{}", style("✔ Telemetry disabled.").yellow());
+                }
+                "token" => {
+                    let new_tok = parts.get(2).copied().unwrap_or("");
+                    let token_val = if new_tok.is_empty() {
+                        print!("Enter new Logfire token: ");
+                        let _ = io::stdout().flush();
+                        let mut line = String::new();
+                        let _ = io::stdin().read_line(&mut line);
+                        line.trim().to_string()
+                    } else {
+                        new_tok.to_string()
+                    };
+
+                    if !token_val.is_empty() {
+                        app_config.logfire_token = Some(token_val.clone());
+                        if app_config.enable_telemetry
+                            && let Some(mgr) = crate::core::TelemetryManager::global()
+                        {
+                            let _ = mgr.enable(&token_val);
+                        }
+                        let _ = app_config.save();
+                        println!(
+                            "{}",
+                            style("✔ Logfire token updated and persisted in config.").green()
+                        );
+                    } else {
+                        println!("{}", style("Token unchanged.").yellow());
+                    }
+                }
+                _ => {
+                    let is_active = crate::core::TelemetryManager::global()
+                        .map(|t| t.is_enabled())
+                        .unwrap_or(app_config.enable_telemetry);
+
+                    let token_hint = if let Some(ref t) = app_config.logfire_token {
+                        if t.len() > 8 {
+                            format!("saved ({}***{})", &t[..4], &t[t.len() - 4..])
+                        } else {
+                            "saved (***)".to_string()
+                        }
+                    } else if std::env::var("LOGFIRE_TOKEN").is_ok() {
+                        "from env LOGFIRE_TOKEN".to_string()
+                    } else {
+                        "not set".to_string()
+                    };
+
+                    println!("\n  {}", style("LOGFIRE TELEMETRY & TRACING").bold().cyan());
+                    println!("  {}", style("─".repeat(50)).color256(240));
+                    println!(
+                        "  {:20}: {}",
+                        style("Telemetry Status").color256(244),
+                        if is_active {
+                            style("Enabled (exporting to Logfire)").green().bold()
+                        } else {
+                            style("Disabled").yellow()
+                        }
+                    );
+                    println!(
+                        "  {:20}: {}",
+                        style("Logfire Token").color256(244),
+                        style(token_hint).color256(117)
+                    );
+                    println!("\n  {}", style("Commands:").bold());
+                    println!(
+                        "    /telemetry on            - Enable telemetry (prompts for token if not set)"
+                    );
+                    println!("    /telemetry off           - Disable telemetry");
+                    println!("    /telemetry token <token> - Update saved Logfire token");
+                    println!();
+                }
+            }
+            continue;
+        }
+
         // ── /sessions ─────────────────────────────────────────
         if trimmed == "/sessions" {
             match persistence::list_sessions() {
@@ -1865,6 +2251,17 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
             io::stdout().flush().ok();
         });
 
+        let actual_mode = if app_config.sandbox_mode == sandbox::SandboxMode::Worktree {
+            if sandbox::requires_worktree(trimmed) {
+                sandbox::SandboxMode::Worktree
+            } else {
+                sandbox::SandboxMode::Local
+            }
+        } else {
+            app_config.sandbox_mode
+        };
+        sandbox.set_mode(actual_mode);
+
         tokio::select! {
             res = engine.run_turn(&system_prompt, trimmed, Some(tx)) => {
                 printer.await.ok(); // wait for printer task to finish rendering
@@ -1873,13 +2270,18 @@ pub async fn run_repl(mut app_config: config::AppConfig, resume_id: Option<Strin
                         if final_text.is_empty() {
                             println!("  {} {}", user_pipe, "(empty response)".dimmed());
                         }
+                        let _ = sandbox.finish_turn(true).await;
                     }
-                    Err(e) => println!("\n{}", format!("✘ Error: {}", e).red()),
+                    Err(e) => {
+                        println!("\n{}", format!("✘ Error: {}", e).red());
+                        let _ = sandbox.finish_turn(false).await;
+                    }
                 }
             }
             _ = tokio::signal::ctrl_c() => {
                 printer.abort();
                 println!("\n{}", "[⛔ Request cancelled]".red().bold());
+                let _ = sandbox.finish_turn(false).await;
             }
         }
 
@@ -2029,6 +2431,10 @@ fn exit_gracefully(engine: &engine::Engine, start_time: chrono::DateTime<Local>)
         total_tool_calls
     );
     println!();
+
+    if let Some(telemetry) = crate::core::TelemetryManager::global() {
+        telemetry.shutdown_sync();
+    }
 
     std::process::exit(0);
 }

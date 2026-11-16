@@ -47,6 +47,10 @@ tiktoken-rs = "0.6.0"
 wasmi = "0.31.2"
 wasmi_wasi = "0.31.2"
 wasi-common = "2.0.2"
+logfire = "0.14.0"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.34"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 blas-src = { version = "0.10", features = ["openblas"] }

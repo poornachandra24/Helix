@@ -15,11 +15,195 @@ use crate::config::{ApiFormat, AppConfig};
 const FALLBACK_CONTEXT_WINDOW: usize = 16_384;
 
 // ──────────────────────────────────────────────
+// Offline Model Knowledge Base
+// ──────────────────────────────────────────────
+
+const KNOWN_MODELS: &[(&str, usize)] = &[
+    // Anthropic Claude
+    ("claude-3-7-sonnet", 200_000),
+    ("claude-3.7-sonnet", 200_000),
+    ("claude-3-5-sonnet", 200_000),
+    ("claude-3.5-sonnet", 200_000),
+    ("claude-3-5-haiku", 200_000),
+    ("claude-3.5-haiku", 200_000),
+    ("claude-3-opus", 200_000),
+    ("claude-3-haiku", 200_000),
+    ("claude-2.1", 200_000),
+    ("claude-2", 100_000),
+    // OpenAI
+    ("gpt-4.5", 128_000),
+    ("gpt-4o-mini", 128_000),
+    ("gpt-4o", 128_000),
+    ("gpt-4-turbo", 128_000),
+    ("o1-mini", 128_000),
+    ("o1-preview", 128_000),
+    ("o1", 200_000),
+    ("o3-mini", 200_000),
+    ("o3", 200_000),
+    ("chatgpt-4o", 128_000),
+    ("gpt-4-32k", 32_768),
+    ("gpt-4", 8_192),
+    ("gpt-3.5-turbo-16k", 16_384),
+    ("gpt-3.5-turbo", 16_384),
+    // DeepSeek
+    ("deepseek-r1", 128_000),
+    ("deepseek-reasoner", 128_000),
+    ("deepseek-chat", 128_000),
+    ("deepseek-v3", 128_000),
+    ("deepseek-coder-v2", 128_000),
+    ("deepseek-coder", 64_000),
+    // Google Gemini
+    ("gemini-2.0-flash", 1_048_576),
+    ("gemini-2.0-pro", 2_097_152),
+    ("gemini-1.5-pro", 2_097_152),
+    ("gemini-1.5-flash-8b", 1_048_576),
+    ("gemini-1.5-flash", 1_048_576),
+    ("gemini-pro", 32_768),
+    // Meta Llama
+    ("llama-3.3", 131_072),
+    ("llama3.3", 131_072),
+    ("llama-3.2", 131_072),
+    ("llama3.2", 131_072),
+    ("llama-3.1", 131_072),
+    ("llama3.1", 131_072),
+    ("llama-3", 8_192),
+    ("llama3", 8_192),
+    ("llama-2", 4_096),
+    ("llama2", 4_096),
+    ("code-llama", 16_384),
+    ("codellama", 16_384),
+    // Qwen
+    ("qwen2.5-coder", 131_072),
+    ("qwen2.5", 131_072),
+    ("qwen-2.5", 131_072),
+    ("qwen2", 32_768),
+    ("qwq", 32_768),
+    // Mistral
+    ("codestral", 32_768),
+    ("mistral-large", 128_000),
+    ("mistral-small", 32_768),
+    ("mistral-nemo", 128_000),
+    ("pixtral", 128_000),
+    ("mixtral-8x22b", 65_536),
+    ("mixtral-8x7b", 32_768),
+    ("mistral-7b", 32_768),
+    // Cohere
+    ("command-r-plus", 128_000),
+    ("command-r+", 128_000),
+    ("command-r", 128_000),
+    // Gemma & Google Open Models
+    ("gemma4", 131_072),
+    ("gemma-4", 131_072),
+    ("gemma3", 131_072),
+    ("gemma-3", 131_072),
+    ("gemma2", 8_192),
+    ("gemma-2", 8_192),
+    // Ollama Cloud & OSS Models
+    ("gpt-oss", 131_072),
+    // xAI Grok
+    ("grok-2", 131_072),
+    ("grok", 131_072),
+];
+
+/// Fast offline lookup for known model names and variations.
+pub fn lookup_known_model(model: &str) -> Option<usize> {
+    let clean = model.to_lowercase().replace('_', "-");
+    let model_name = clean.split('/').next_back().unwrap_or(&clean);
+    let base_name = model_name.split(':').next().unwrap_or(model_name);
+
+    for (pattern, ctx) in KNOWN_MODELS {
+        if model_name.contains(pattern) || base_name.contains(pattern) {
+            return Some(*ctx);
+        }
+    }
+    None
+}
+
+/// Detect explicit context window size patterns from model naming conventions.
+pub fn parse_context_from_name(model: &str) -> Option<usize> {
+    let lower = model.to_lowercase();
+    if lower.contains("1m") || lower.contains("1000k") {
+        return Some(1_000_000);
+    }
+    if lower.contains("200k") {
+        return Some(200_000);
+    }
+    if lower.contains("128k") || lower.contains("131k") {
+        return Some(131_072);
+    }
+    if lower.contains("64k") || lower.contains("65k") {
+        return Some(65_536);
+    }
+    if lower.contains("32k") {
+        return Some(32_768);
+    }
+    if lower.contains("16k") {
+        return Some(16_384);
+    }
+    if lower.contains("8k") {
+        return Some(8_192);
+    }
+    if lower.contains("4k") {
+        return Some(4_096);
+    }
+    None
+}
+
+/// Dynamically determine response headroom based on model size and reasoning level.
+pub fn resolve_headroom(
+    model_window: usize,
+    thinking_level: Option<&str>,
+    model_name: &str,
+) -> usize {
+    let model_lower = model_name.to_lowercase();
+    let is_reasoning_model = model_lower.contains("o1")
+        || model_lower.contains("o3")
+        || model_lower.contains("r1")
+        || model_lower.contains("reasoner")
+        || model_lower.contains("qwq");
+
+    let is_thinking_active = thinking_level
+        .map(|l| {
+            let s = l.to_lowercase();
+            s != "off" && s != "disabled" && s != "0"
+        })
+        .unwrap_or(false);
+
+    let base_headroom = if is_reasoning_model || is_thinking_active {
+        if let Some(level) = thinking_level {
+            if let Ok(budget) = level.parse::<usize>() {
+                budget + 4096
+            } else if level.eq_ignore_ascii_case("high") {
+                16_384
+            } else if level.eq_ignore_ascii_case("medium") {
+                8_192
+            } else {
+                4_096
+            }
+        } else {
+            // Default for reasoning models
+            12_288
+        }
+    } else if model_window >= 100_000 {
+        8_192
+    } else if model_window >= 32_000 {
+        4_096
+    } else if model_window >= 16_000 {
+        2_048
+    } else {
+        (model_window / 4).clamp(512, 1024)
+    };
+
+    // Ensure headroom never consumes more than 30% of total context window
+    base_headroom.min(model_window * 3 / 10).max(512)
+}
+
+// ──────────────────────────────────────────────
 // Public entry point
 // ──────────────────────────────────────────────
 
 /// Resolve the context window for the currently active model.
-/// Returns the override if set, otherwise probes the provider and external sources.
+/// Returns the override if set, otherwise probes offline catalog, provider, and external sources.
 pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usize {
     if let Some(override_val) = config.context_window_override {
         tracing::info!(
@@ -29,11 +213,33 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
         return override_val;
     }
 
-    let provider = config.resolve_best_provider(client).await;
-
     let model = &config.active_model;
 
-    // Strategy 1 — Ollama native /api/show (passes auth for cloud models)
+    // Strategy 1 — Authoritative offline knowledge base (Instant, zero-network, sandbox-safe)
+    if let Some(w) = lookup_known_model(model) {
+        tracing::info!(
+            context_window = w,
+            source = "known models catalog",
+            model = %model,
+            "Context window resolved from offline catalog"
+        );
+        return w;
+    }
+
+    // Strategy 2 — Name pattern heuristic (e.g. "my-model-128k")
+    if let Some(w) = parse_context_from_name(model) {
+        tracing::info!(
+            context_window = w,
+            source = "model name pattern",
+            model = %model,
+            "Context window resolved from model name pattern"
+        );
+        return w;
+    }
+
+    let provider = config.resolve_best_provider(client).await;
+
+    // Strategy 3 — Ollama native /api/show (passes auth for cloud models)
     if provider.api_format == ApiFormat::OllamaNative
         && let Some(w) = query_ollama_show(
             &provider.base_url,
@@ -51,7 +257,7 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
         return w;
     }
 
-    // Strategy 2 — Provider's own /v1/models/{id} (OpenAI and compatible)
+    // Strategy 4 — Provider's own /v1/models/{id} (OpenAI and compatible)
     if provider.api_format == ApiFormat::OpenAiCompatible
         && let Some(w) = query_openai_models(
             &provider.base_url,
@@ -69,7 +275,7 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
         return w;
     }
 
-    // Strategy 3 — OpenRouter public catalogue (free, no auth, covers 1000+ models)
+    // Strategy 5 — OpenRouter public catalogue (free, no auth, covers 1000+ models)
     if let Some(w) = query_openrouter_catalogue(model, client).await {
         tracing::info!(
             context_window = w,
@@ -79,12 +285,23 @@ pub async fn resolve_context_window(config: &AppConfig, client: &Client) -> usiz
         return w;
     }
 
+    // Strategy 6 — Family-based heuristic fallback
+    let family_fallback = if model.to_lowercase().contains("claude")
+        || model.to_lowercase().contains("gpt-4")
+        || model.to_lowercase().contains("deepseek")
+        || model.to_lowercase().contains("qwen")
+    {
+        65_536
+    } else {
+        FALLBACK_CONTEXT_WINDOW
+    };
+
     tracing::warn!(
         model = %model,
-        fallback = FALLBACK_CONTEXT_WINDOW,
-        "Could not determine context window from any source; using conservative fallback"
+        fallback = family_fallback,
+        "Could not determine context window from any source; using fallback"
     );
-    FALLBACK_CONTEXT_WINDOW
+    family_fallback
 }
 
 // ──────────────────────────────────────────────
@@ -329,4 +546,52 @@ pub fn build_lookup_client() -> Client {
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .expect("Failed to build lookup client")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_known_models() {
+        assert_eq!(
+            lookup_known_model("claude-3-7-sonnet-20250219"),
+            Some(200_000)
+        );
+        assert_eq!(
+            lookup_known_model("anthropic/claude-3.5-sonnet"),
+            Some(200_000)
+        );
+        assert_eq!(lookup_known_model("gpt-4o"), Some(128_000));
+        assert_eq!(lookup_known_model("o1-mini"), Some(128_000));
+        assert_eq!(lookup_known_model("deepseek-ai/deepseek-r1"), Some(128_000));
+        assert_eq!(lookup_known_model("gemini-2.0-flash"), Some(1_048_576));
+        assert_eq!(lookup_known_model("qwen2.5-coder:32b"), Some(131_072));
+    }
+
+    #[test]
+    fn test_parse_context_from_name() {
+        assert_eq!(
+            parse_context_from_name("my-custom-model-128k"),
+            Some(131_072)
+        );
+        assert_eq!(parse_context_from_name("custom-1m"), Some(1_000_000));
+        assert_eq!(parse_context_from_name("unknown-model"), None);
+    }
+
+    #[test]
+    fn test_resolve_headroom() {
+        // Reasoning model gets generous headroom
+        assert_eq!(resolve_headroom(128_000, None, "deepseek-r1"), 12_288);
+        assert_eq!(resolve_headroom(200_000, None, "o3-mini"), 12_288);
+        // Explicit thinking budget
+        assert_eq!(
+            resolve_headroom(128_000, Some("8192"), "claude-3-7-sonnet"),
+            12_288
+        );
+        // Standard large model (128k) gets 8192
+        assert_eq!(resolve_headroom(128_000, None, "gpt-4o"), 8_192);
+        // Small model clamped to <= 30% of window
+        assert_eq!(resolve_headroom(2_048, None, "tiny-model"), 512);
+    }
 }

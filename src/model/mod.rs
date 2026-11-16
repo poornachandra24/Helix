@@ -535,8 +535,20 @@ struct AccumulatedToolCall {
 
 #[async_trait]
 impl ModelAdapter for OpenAiCompatibleAdapter {
-    #[tracing::instrument(skip(self, messages, tools, stream_tx),
-        fields(provider = %self.config.active_provider, model = %self.config.active_model))]
+    #[tracing::instrument(
+        skip(self, messages, tools, stream_tx),
+        fields(
+            provider = %self.config.active_provider,
+            model = %self.config.active_model,
+            gen_ai.system = %self.config.active_provider,
+            gen_ai.request.model = %self.config.active_model,
+            gen_ai.usage.input_tokens = tracing::field::Empty,
+            gen_ai.usage.output_tokens = tracing::field::Empty,
+            gen_ai.usage.total_tokens = tracing::field::Empty,
+            response_type = tracing::field::Empty,
+            dataset.is_training_signal = true,
+        )
+    )]
     async fn call(
         &self,
         system_prompt: &str,
@@ -678,17 +690,51 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                     "content": null,
                     "tool_calls": tool_calls_json,
                 });
+                tracing::Span::current().record(
+                    "response_type",
+                    format!("tool_calls({})", calls.len()).as_str(),
+                );
                 Ok(ModelResponse::ToolCalls(calls, normalized_message))
             } else {
                 if let Some(resp) = self.try_parse_markdown_tool_call(&full_text) {
+                    tracing::Span::current().record("response_type", "markdown_tool_call");
                     return Ok(resp);
                 }
+                tracing::Span::current().record("response_type", "end_turn");
                 Ok(ModelResponse::EndTurn(full_text))
             }
         } else {
             let resp: Value = resp_val.json().await?;
             tracing::debug!(response = %resp, "Raw model response");
+
+            let span = tracing::Span::current();
+            if let Some(usage) = resp.get("usage") {
+                if let Some(prompt) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
+                    span.record("gen_ai.usage.input_tokens", prompt);
+                }
+                if let Some(completion) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
+                    span.record("gen_ai.usage.output_tokens", completion);
+                }
+                if let Some(total) = usage.get("total_tokens").and_then(|v| v.as_u64()) {
+                    span.record("gen_ai.usage.total_tokens", total);
+                }
+            }
+
             let model_response = self.parse_response(&resp, format)?;
+            match &model_response {
+                ModelResponse::EndTurn(_) => {
+                    span.record("response_type", "end_turn");
+                }
+                ModelResponse::ToolCalls(calls, _) => {
+                    span.record(
+                        "response_type",
+                        format!("tool_calls({})", calls.len()).as_str(),
+                    );
+                }
+                ModelResponse::ParseError { .. } => {
+                    span.record("response_type", "parse_error");
+                }
+            }
 
             // Replay text through the streaming channel so the REPL gets a
             // typewriter effect without requiring real SSE parsing.

@@ -14,6 +14,7 @@ pub mod builtins;
 
 pub mod mcp;
 pub mod sandbox;
+pub mod workflow;
 
 use anyhow::Result;
 use async_trait::async_trait;
