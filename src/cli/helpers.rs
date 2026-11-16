@@ -592,8 +592,13 @@ fn redact_secrets(input: &str) -> String {
     }
     out = result;
 
-    // Pass 2 – HTTP header style:  xi-api-key: VALUE  /  Bearer VALUE
-    let header_triggers = ["xi-api-key:", "Authorization:", "bearer ", "Bearer "];
+    // Pass 2 – HTTP header style:  Authorization: Bearer VALUE  /  xi-api-key: VALUE  /  Bearer VALUE
+    let header_triggers = [
+        "authorization: bearer ",
+        "xi-api-key:",
+        "bearer ",
+        "authorization:",
+    ];
     for trigger in &header_triggers {
         let trigger_lower = trigger.to_lowercase();
         let mut new_out = String::with_capacity(out.len());
@@ -714,4 +719,33 @@ pub fn confirm_agent_action(
         .interact()?;
 
     Ok(allowed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wrap_text_preserves_empty_lines() {
+        let input = "First line\n\nSecond line with several words to wrap properly";
+        let wrapped = wrap_text(input, 20);
+        assert!(wrapped.contains(&String::new()), "Must preserve empty line");
+        assert!(wrapped.len() >= 3);
+    }
+
+    #[test]
+    fn test_wrap_text_single_short_line() {
+        let input = "Short line";
+        let wrapped = wrap_text(input, 50);
+        assert_eq!(wrapped, vec!["Short line"]);
+    }
+
+    #[test]
+    fn test_redact_secrets_in_payload() {
+        let input = "API_KEY=sk-1234567890abcdef and Authorization: Bearer secret_token_xyz";
+        let redacted = redact_secrets(input);
+        assert!(!redacted.contains("sk-1234567890abcdef"));
+        assert!(!redacted.contains("secret_token_xyz"));
+        assert!(redacted.contains("***REDACTED***"));
+    }
 }

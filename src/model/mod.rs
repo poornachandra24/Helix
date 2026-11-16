@@ -764,3 +764,114 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn make_test_adapter() -> OpenAiCompatibleAdapter {
+        OpenAiCompatibleAdapter::new(AppConfig::default())
+    }
+
+    #[test]
+    fn test_parse_response_end_turn() {
+        let adapter = make_test_adapter();
+        let resp = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello, how can I help you today?"
+                }
+            }]
+        });
+
+        let parsed = adapter
+            .parse_response(&resp, &ApiFormat::OpenAiCompatible)
+            .unwrap();
+        match parsed {
+            ModelResponse::EndTurn(text) => {
+                assert_eq!(text, "Hello, how can I help you today?");
+            }
+            _ => panic!("Expected EndTurn response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_response_tool_calls() {
+        let adapter = make_test_adapter();
+        let resp = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"Cargo.toml\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let parsed = adapter
+            .parse_response(&resp, &ApiFormat::OpenAiCompatible)
+            .unwrap();
+        match parsed {
+            ModelResponse::ToolCalls(calls, msg) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].id, "call_123");
+                assert_eq!(calls[0].args["path"], "Cargo.toml");
+                assert!(msg["tool_calls"].is_array());
+            }
+            _ => panic!("Expected ToolCalls response"),
+        }
+    }
+
+    #[test]
+    fn test_try_parse_markdown_tool_call() {
+        let adapter = make_test_adapter();
+        let markdown = r#"
+I will inspect the project file now.
+```json
+{
+  "name": "read_file",
+  "arguments": {
+    "path": "src/main.rs"
+  }
+}
+```
+"#;
+
+        let parsed = adapter
+            .try_parse_markdown_tool_call(markdown)
+            .expect("Should extract markdown tool call");
+        match parsed {
+            ModelResponse::ToolCalls(calls, _) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].args["path"], "src/main.rs");
+            }
+            _ => panic!("Expected ToolCalls response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_response_api_error() {
+        let adapter = make_test_adapter();
+        let resp = json!({
+            "error": {
+                "message": "Quota exceeded or invalid API key",
+                "type": "insufficient_quota"
+            }
+        });
+
+        let result = adapter.parse_response(&resp, &ApiFormat::OpenAiCompatible);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Quota exceeded"));
+    }
+}

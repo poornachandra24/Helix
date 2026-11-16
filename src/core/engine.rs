@@ -1282,4 +1282,70 @@ mod tests {
         ];
         assert!((cosine_similarity(&a, &d) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
     }
+
+    #[test]
+    fn test_greetings_cache_entries() {
+        assert!(!GREETINGS.is_empty());
+        let greetings_keys: Vec<&str> = GREETINGS.iter().map(|(q, _)| *q).collect();
+        assert!(greetings_keys.contains(&"hi"));
+        assert!(greetings_keys.contains(&"hello"));
+        assert!(greetings_keys.contains(&"who are you"));
+    }
+
+    #[test]
+    fn test_scratchpad_path_format() {
+        let tools = ToolRegistry::new();
+        let session = crate::core::persistence::Session::new(Some("test_session_12345")).unwrap();
+        let budget = crate::core::context::ContextBudget::new(4096, "system prompt", &[], 2048);
+        let context = ContextManager::new(budget);
+        let model = Box::new(crate::model::OpenAiCompatibleAdapter::new(
+            crate::config::AppConfig::default(),
+        ));
+        let dynamic_registry = Arc::new(std::sync::Mutex::new(
+            crate::tools::DynamicRegistryState::default(),
+        ));
+        let engine = Engine::new(
+            model,
+            context,
+            tools,
+            session,
+            std::collections::HashMap::new(),
+            dynamic_registry,
+        );
+
+        let path = engine.scratchpad_path();
+        assert!(
+            path.to_string_lossy()
+                .contains("helix_scratchpad_test_session_12345.md")
+        );
+    }
+
+    #[test]
+    fn test_engine_builder_methods() {
+        let tools = ToolRegistry::new();
+        let session = crate::core::persistence::Session::new(None).unwrap();
+        let budget = crate::core::context::ContextBudget::new(4096, "system prompt", &[], 2048);
+        let context = ContextManager::new(budget);
+        let model = Box::new(crate::model::OpenAiCompatibleAdapter::new(
+            crate::config::AppConfig::default(),
+        ));
+        let dynamic_registry = Arc::new(std::sync::Mutex::new(
+            crate::tools::DynamicRegistryState::default(),
+        ));
+        let engine = Engine::new(
+            model,
+            context,
+            tools,
+            session,
+            std::collections::HashMap::new(),
+            dynamic_registry,
+        )
+        .with_headless(true)
+        .with_reflection(false)
+        .with_max_iterations(10);
+
+        assert!(engine.is_headless);
+        assert!(!engine.enable_reflection);
+        assert_eq!(engine.max_iterations, 10);
+    }
 }

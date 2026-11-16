@@ -106,6 +106,7 @@ impl Default for ToolRegistry {
     }
 }
 
+#[derive(Default)]
 pub struct DynamicRegistryState {
     pub all_mcp_tools: HashMap<String, Arc<dyn Tool>>,
     pub all_skills: HashMap<String, String>, // name -> content

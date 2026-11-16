@@ -81,6 +81,22 @@ pub struct AppConfig {
     pub logfire_token: Option<String>,
 }
 
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            providers: vec![],
+            active_provider: "auto".to_string(),
+            active_model: "gpt-4o".to_string(),
+            context_window_override: None,
+            response_headroom: Some(2048),
+            sandbox_mode: SandboxMode::Local,
+            thinking_level: None,
+            enable_telemetry: false,
+            logfire_token: None,
+        }
+    }
+}
+
 impl AppConfig {
     #[allow(dead_code)]
     pub fn get_active_provider(&self) -> Result<Provider> {

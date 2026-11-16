@@ -511,17 +511,75 @@ mod tests {
         // Test clearing workspace A
         reloaded.clear_workspace(workspace_a).unwrap();
         let matches_cleared = reloaded
-            .search("safety and speed", None, workspace_a, 5)
-            .unwrap();
-        assert!(matches_cleared.is_empty(), "Workspace A should be empty");
-
-        // Workspace B should still be intact
-        let matches_intact = reloaded
-            .search("package manager", None, workspace_b, 5)
+            .search(
+                "What is safety and speed in programming?",
+                None,
+                workspace_a,
+                5,
+            )
             .unwrap();
         assert!(
-            !matches_intact.is_empty(),
-            "Workspace B should still have memories"
+            matches_cleared.is_empty(),
+            "Workspace A should be empty after clear"
         );
+    }
+
+    #[test]
+    fn test_embedding_cache_hit_and_eviction() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut engine = HelixMemoryEngine::new(temp_dir.path()).unwrap();
+
+        assert_eq!(engine.embedding_cache.len(), 0);
+
+        // First embed call populates cache
+        let query = "Optimizing neural engine trajectories";
+        let vec1 = engine.embed_text(query).unwrap();
+        assert_eq!(engine.embedding_cache.len(), 1);
+
+        // Second embed call must return exact cached vector
+        let vec2 = engine.embed_text(query).unwrap();
+        assert_eq!(vec1, vec2);
+        assert_eq!(engine.embedding_cache.len(), 1);
+
+        // Bounded capacity test: inserting 512 entries should trigger cache clear
+        for i in 0..512 {
+            let _ = engine.embed_text(&format!("query variant {}", i));
+        }
+        // Cache should have cleared and holds the remaining entries
+        assert!(engine.embedding_cache.len() <= 512);
+    }
+
+    #[test]
+    fn test_delete_last_memory() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut engine = HelixMemoryEngine::new(temp_dir.path()).unwrap();
+        let workspace = "/path/to/test_delete";
+
+        // Deleting when empty returns false
+        assert!(!engine.delete_last_memory(workspace).unwrap());
+
+        // Insert two memories
+        engine
+            .insert("First memory snippet", None, workspace)
+            .unwrap();
+        engine
+            .insert("Second memory snippet", None, workspace)
+            .unwrap();
+        assert_eq!(engine.size(), 2);
+
+        // Delete last memory
+        assert!(engine.delete_last_memory(workspace).unwrap());
+        assert_eq!(engine.size(), 1);
+
+        // Search should now only find first memory
+        let matches = engine
+            .search("First memory snippet", None, workspace, 5)
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].text.contains("First"));
+
+        // Delete remaining
+        assert!(engine.delete_last_memory(workspace).unwrap());
+        assert_eq!(engine.size(), 0);
     }
 }

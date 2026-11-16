@@ -16,7 +16,7 @@ WORKDIR /usr/src/helix
 # Create dummy files to cache Cargo dependencies
 COPY Cargo.toml Cargo.lock ./
 COPY ruvector-sona/Cargo.toml ./ruvector-sona/Cargo.toml
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN mkdir src && echo "fn main() {}" > src/main.rs && touch src/lib.rs
 RUN mkdir -p ruvector-sona/src && touch ruvector-sona/src/lib.rs
 
 # Pre-compile dependencies
@@ -26,7 +26,7 @@ RUN cargo build --release
 COPY . .
 
 # Re-touch dummy files to ensure they are rebuilt with actual code
-RUN touch src/main.rs ruvector-sona/src/lib.rs
+RUN touch src/main.rs src/lib.rs ruvector-sona/src/lib.rs
 
 # Build the release binary
 RUN cargo build --release
