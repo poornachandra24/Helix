@@ -330,6 +330,8 @@ mod tests {
 
         assert_eq!(builder.step_count(), 2);
 
+        // Sleep briefly to ensure elapsed time is non-zero on ultra-fast runners
+        std::thread::sleep(std::time::Duration::from_millis(1));
         let trajectory = builder.build(0.85);
 
         assert_eq!(trajectory.id, 42);
