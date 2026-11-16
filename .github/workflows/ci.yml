@@ -83,6 +83,11 @@ jobs:
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
+      - name: Check Rustdoc Documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps
+
   security-audit:
     name: Security Vulnerability Audit
     needs: detect-changes

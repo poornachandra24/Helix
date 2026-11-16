@@ -32,7 +32,7 @@
 
 #![cfg(feature = "wasm")]
 
-use crate::{LearningSignal, SonaConfig, SonaEngine};
+use crate::{SonaConfig, SonaEngine};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
@@ -115,7 +115,7 @@ impl WasmSonaEngine {
     #[wasm_bindgen(js_name = startTrajectory)]
     pub fn start_trajectory(&self, query_embedding: Vec<f32>) -> u64 {
         let engine = self.inner.read();
-        let builder = engine.begin_trajectory(query_embedding);
+        let _builder = engine.begin_trajectory(query_embedding);
         // Return simple counter ID since builder.id is private
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -366,7 +366,6 @@ pub fn wasm_init() {
 
 use crate::training::{
     EphemeralAgent as RustEphemeralAgent, FederatedCoordinator as RustFederatedCoordinator,
-    FederatedTopology,
 };
 
 /// WASM-compatible Ephemeral Agent for federated learning

@@ -69,13 +69,13 @@
 //!
 //! ## Core Subsystems
 //!
-//! *   **`core`**: The execution engine, responsible for coordinating tool iterations, metric collection, agent self-correction, and the reflective scratchpad planning loop.
+//! *   **`core`**: The execution engine, responsible for coordinating tool iterations, metric collection, agent self-correction, the reflective scratchpad planning loop, and OpenTelemetry / Logfire tracing via `core::telemetry`.
 //! *   **`memory`**: The Helix Knowledge Engine, implementing a three-tier knowledge framework:
 //!     *   **Procedural Knowledge** — self-correction via `HelixScratchpad` grounding; stores current execution plan and gap-closure strategies in `.helix_scratchpad.md`.
 //!     *   **Episodic Knowledge** — session history and post-mortem LLM-generated reflection summaries written to `<data_dir>/memory/sessions/`.
-//!     *   **Long-Term Knowledge** — hybrid retrieval combining quantized semantic vector search (`turbovec` 4-bit TurboQuant, SIMD cosine similarity) with lexical FTS5 BM25 full-text search in SQLite, fused via Reciprocal Rank Fusion (RRF).
+//!     *   **Long-Term Knowledge** — hybrid retrieval combining quantized semantic vector search (`turbovec` 4-bit TurboQuant, SIMD cosine similarity with in-memory ONNX embedding cache) with lexical FTS5 BM25 full-text search in SQLite, fused via Reciprocal Rank Fusion (RRF).
 //! *   **`model`**: Language model interfaces, API provider abstractions, streaming response parsing, and reasoning content extraction.
-//! *   **`tools`**: Built-in system tools (file I/O, web browsing), sandboxed execution backends (Docker, Local, metered WebAssembly/WASI via `wasmi`), and Model Context Protocol (MCP) client capabilities.
+//! *   **`tools`**: Built-in system tools (file I/O, web browsing), sandboxed execution backends (Docker, Local, metered WebAssembly/WASI via `wasmi`), multi-agent workflow orchestration, and Model Context Protocol (MCP) client capabilities.
 //! *   **`config`**: Credentials, model templates, custom configuration pathways, and setup wizard logic.
 //! *   **`cli`**: Prompt input-loop, terminal-adaptive layout renderers, interactive REPL command routing, and stream telemetry display.
 //! *   **`error`**: Unified error hierarchy and healer classification metrics.
@@ -126,12 +126,28 @@
 //!
 //! See [docs/mcp_integration.md](https://github.com/poornachandra24/Helix/blob/main/docs/mcp_integration.md) for the full lifecycle diagram.
 //!
+//! ## OpenTelemetry Tracing & Small-Model Fine-Tuning
+//!
+//! Helix integrates native OpenTelemetry tracing backed by Pydantic Logfire (`core::telemetry`):
+//!
+//! *   **Dynamic Exporter**: An asynchronous, Tokio-backed dynamic span processor routes finished
+//!     spans to Logfire endpoints without risking subscriber filter corruption.
+//! *   **High Signal-to-Noise Ratio**: A targeted per-layer filter suppresses high-frequency transport
+//!     noise (HTTP libraries, Tokio I/O, tokenizers), isolating high-value agent decision loops.
+//! *   **Fine-Tuning Dataset Schema**: Decision turns and tool spans are annotated with structured SFT/DPO
+//!     metadata (`dataset.is_training_signal`, `dataset.quality_tier`, `dataset.tools_used`,
+//!     `dataset.has_healer_retries`, and observation outputs), enabling downstream extraction of curated
+//!     trajectories for fine-tuning compact local models.
+//!
+//! See [docs/telemetry.md](https://github.com/poornachandra24/Helix/blob/main/docs/telemetry.md) for full configuration details.
+//!
 //! ## Open Source Credits & Dependencies
 //!
 //! Helix is built on top of many incredible open-source libraries and crates from the Rust ecosystem:
 //!
 //! *   **Semantic Indexing**: `fastembed` for local ONNX text embeddings, and [turbovec](https://github.com/RyanCodrai/turbovec) by Ryan Codrai for fast, memory-mapped vector search.
 //! *   **Self-Optimizing Neural Architecture (SONA)**: `ruvector-sona` for runtime-adaptive context query alignment.
+//! *   **OpenTelemetry & Observability**: `opentelemetry`, `opentelemetry-otlp`, and `logfire` powering distributed tracing, structured SFT/DPO trajectory logging, and Logfire cloud dashboards.
 //! *   **Model Context Protocol (MCP)**: `rmcp` client capabilities for spawning context and tool servers.
 //! *   **WASM Sandboxing**: `wasmi` and `wasmi_wasi` for running secure, isolated WebAssembly client code.
 //! *   **Terminal UI Orchestration**: `crossterm` for cross-platform raw console support, `termimad` for Markdown rendering, `dialoguer` for interactive setups, and `comfy-table` for output alignment.
@@ -143,8 +159,8 @@
 //!
 //! The following capabilities are under active research and development:
 //!
-//! ### Short-Term (Next 1-3 Months): Observability & Diagnostics
-//! *   **OTLP Tracing & Observability**: Integrate native OpenTelemetry (`opentelemetry` & `tracing-opentelemetry`) to export spans for model latencies, vector DB search queries, and sandbox executions to external collectors (e.g. Jaeger, Honeycomb).
+//! ### Short-Term: Observability & Diagnostics
+//! *   **OTLP Tracing & Observability**: *(Completed in v0.5.0)* Native OpenTelemetry integration with Pydantic Logfire exporter and fine-tuning trajectory capture.
 //! *   **WASM Sandbox Resource Profiling**: Expose WASM guest execution resource statistics (fuel/gas consumed via `wasmi` and sandbox directory disk footprint) directly into the telemetry subscriber.
 //! *   **TUI Performance Overlay**: Add a lightweight, interactive terminal visualization showing real-time token budgets, memory retrieval quality scores, and tool execution cycles.
 //!

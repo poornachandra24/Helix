@@ -1,3 +1,9 @@
+//! # Multi-Agent Workflow Orchestration Subsystem
+//!
+//! Provides dynamic workflow execution primitives (`workflow_run`, `workflow_plan`, and subagent loops),
+//! persistent journaling in `.helix_journal.json`, step-wise resume capabilities, and structured findings
+//! reporting via [`ReportFindingsTool`].
+
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{Value, json};
