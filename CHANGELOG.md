@@ -16,6 +16,20 @@ All notable changes to the Helix project will be documented in this file. The fo
 ### Changed
 *   **OTel Call-Site Noise Filtering**: Applied targeted `EnvFilter` directly to `otel_layer` (`helix=info,ruvector_sona=info,tokenizers=off,hyper=off,reqwest=off,h2=off,mio=off,want=off,fastembed=warn`), slashing trace volume by >95% and raising signal purity to >85%.
 
+### Security & Dependencies
+*   **Vulnerability Remediation (32 Advisories Cleared)**:
+    *   Upgraded `aws-lc-sys` to `0.47.0` (resolves RUSTSEC-2026-0045, RUSTSEC-2026-0046, RUSTSEC-2026-0047, RUSTSEC-2026-0048, RUSTSEC-2026-0044).
+    *   Upgraded `quinn-proto` to `0.11.19` & `quinn-udp` to `0.5.16` (resolves RUSTSEC-2026-0341, RUSTSEC-2026-0342, RUSTSEC-2026-0338, RUSTSEC-2026-0340, RUSTSEC-2026-0339, RUSTSEC-2026-0524, RUSTSEC-2026-0523, RUSTSEC-2026-0538).
+    *   Upgraded `rustls` to `0.23.46` & `rustls-webpki` to `0.103.17` (resolves RUSTSEC-2026-0349, RUSTSEC-2026-0348, RUSTSEC-2026-0346, RUSTSEC-2026-0285, RUSTSEC-2026-0382).
+    *   Upgraded `webpki-roots` and `webpki-root-certs` to `1.0.12` (resolves RUSTSEC-2026-0381, RUSTSEC-2026-0383).
+    *   Upgraded `h2` to `0.4.20` (resolves RUSTSEC-2026-0258).
+    *   Upgraded `crossbeam-epoch` to `0.9.21` (resolves RUSTSEC-2026-0204).
+    *   Upgraded `rkyv` to `0.8.18` (resolves RUSTSEC-2026-0235, RUSTSEC-2026-0234, RUSTSEC-2026-0233).
+    *   Upgraded `rusqlite` to `0.41.0` and `libsqlite3-sys` to `0.39.1` (resolves RUSTSEC-2026-0459).
+    *   Upgraded `rmcp` to `3.10.0` (resolves RUSTSEC-2026-0462).
+    *   Removed unused `ruvllm` dependency and its vulnerable `zip 1.1.4` transitive crate (resolves RUSTSEC-2026-0429, RUSTSEC-2026-0369, RUSTSEC-2026-0368, RUSTSEC-2026-0367).
+    *   Configured `.cargo/audit.toml` to track and document `cap-primitives 0.26.1` trailing-slash advisory RUSTSEC-2026-0482 alongside RUSTSEC-2024-0445.
+
 ---
 
 ## [0.3.0](https://github.com/poornachandra24/Helix/compare/v0.2.0...v0.3.0) (2026-06-21)

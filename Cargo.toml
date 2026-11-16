@@ -39,9 +39,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 fastembed = "5"
 turbovec = "0.6.0"
-rusqlite = { version = "0.31.0", features = ["bundled"] }
-rmcp = { version = "1.7.0", features = ["client", "transport-child-process"] }
-ruvllm = "2.2.1"
+rusqlite = { version = "0.41.0", features = ["bundled"] }
+rmcp = { version = "3.10.0", features = ["client", "transport-child-process"] }
 ruvector-sona = { path = "./ruvector-sona", features = ["serde-support"] }
 tiktoken-rs = "0.6.0"
 wasmi = "0.31.2"

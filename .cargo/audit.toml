@@ -3,4 +3,5 @@
 [advisories]
 ignore = [
     "RUSTSEC-2024-0445", # cap-primitives Windows device filenames sandboxing issue (locked by wasmi_wasi)
+    "RUSTSEC-2026-0482", # cap-primitives trailing slash sandbox escape (locked by wasmi_wasi 0.31.2)
 ]

@@ -121,8 +121,10 @@ impl HelixMemoryEngine {
     /// Return the count of stored memories.
     pub fn size(&self) -> usize {
         self.db
-            .query_row("SELECT COUNT(*) FROM memory_metadata", [], |row| row.get(0))
-            .unwrap_or(0)
+            .query_row("SELECT COUNT(*) FROM memory_metadata", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as usize
     }
 
     /// Embed a single text string using fastembed (or mock deterministic embedder during test).
@@ -242,16 +244,17 @@ impl HelixMemoryEngine {
                  ORDER BY score ASC LIMIT ?",
             );
             if let Ok(mut stmt) = prep_res {
-                let query_res = stmt.query(rusqlite::params![workspace_path, fts_query, limit]);
+                let query_res =
+                    stmt.query(rusqlite::params![workspace_path, fts_query, limit as i64]);
                 if let Ok(mut rows) = query_res {
                     while let Ok(Some(row)) = rows.next() {
-                        if let (Ok(id), Ok(text), Ok(file_path), Ok(score)) = (
-                            row.get::<_, u64>(0),
+                        if let (Ok(id_i64), Ok(text), Ok(file_path), Ok(score)) = (
+                            row.get::<_, i64>(0),
                             row.get::<_, String>(1),
                             row.get::<_, Option<String>>(2),
                             row.get::<_, f32>(3),
                         ) {
-                            sparse_matches.push((id, text, file_path, score));
+                            sparse_matches.push((id_i64 as u64, text, file_path, score));
                         }
                     }
                 }
@@ -275,7 +278,9 @@ impl HelixMemoryEngine {
                 // Retrieve candidate row IDs for the active workspace and global memories
                 let prep_res = self.db.prepare("SELECT id FROM memory_metadata WHERE workspace_path = ? OR workspace_path = 'global'");
                 if let Ok(mut stmt) = prep_res {
-                    let query_res = stmt.query_map([workspace_path], |row| row.get::<_, u64>(0));
+                    let query_res = stmt.query_map([workspace_path], |row| {
+                        row.get::<_, i64>(0).map(|id| id as u64)
+                    });
                     if let Ok(sqlite_ids) = query_res {
                         let allowed_ids: Vec<u64> = sqlite_ids
                             .filter_map(Result::ok)
@@ -291,7 +296,7 @@ impl HelixMemoryEngine {
                             for (score, id) in scores.into_iter().zip(ids) {
                                 if let Ok((text, file_path)) = self.db.query_row(
                                     "SELECT text, file_path FROM memory_metadata WHERE id = ?",
-                                    [id],
+                                    [id as i64],
                                     |row| {
                                         let t: String = row.get(0).unwrap_or_default();
                                         let f: Option<String> = row.get(1).unwrap_or(None);
@@ -361,7 +366,9 @@ impl HelixMemoryEngine {
             .db
             .prepare("SELECT id FROM memory_metadata WHERE workspace_path = ?")?;
         let ids: Vec<u64> = stmt
-            .query_map([workspace_path], |row| row.get(0))?
+            .query_map([workspace_path], |row| {
+                row.get::<_, i64>(0).map(|id| id as u64)
+            })?
             .filter_map(Result::ok)
             .collect();
 
