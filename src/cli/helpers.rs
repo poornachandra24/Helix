@@ -8,6 +8,18 @@ use crate::tools::builtins;
 use crate::tools::mcp;
 use crate::tools::sandbox;
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static AUTO_APPROVE: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable non-interactive auto-approval of all tool actions (e.g. for Harbor / benchmarks)
+pub fn set_auto_approve(approve: bool) {
+    AUTO_APPROVE.store(approve, Ordering::SeqCst);
+}
+
+pub fn is_auto_approve() -> bool {
+    AUTO_APPROVE.load(Ordering::SeqCst)
+}
 
 pub fn print_banner(
     config: &config::AppConfig,
@@ -211,16 +223,19 @@ pub fn build_system_prompt(base: &str, skill_reg: &skills::SkillRegistry) -> Str
 pub fn build_tool_registry(
     sandbox: sandbox::SharedSandbox,
     skills_dir: std::path::PathBuf,
+    config: crate::config::AppConfig,
 ) -> tools::ToolRegistry {
     let mut registry = tools::ToolRegistry::new();
     registry.register(builtins::BashTool::new(sandbox.clone()));
     registry.register(builtins::ReadFileTool::new(sandbox.clone()));
     registry.register(builtins::WriteFileTool::new(sandbox.clone()));
+    registry.register(builtins::StrReplaceTool::new(sandbox.clone()));
     registry.register(builtins::ListDirTool::new(sandbox.clone()));
     registry.register(builtins::WasmExecuteTool::new(sandbox.clone()));
     registry.register(builtins::WebFetchTool::new());
     registry.register(builtins::WebSearchTool::new());
     registry.register(builtins::AddSkillTool::new(skills_dir));
+    registry.register(tools::workflow::WorkflowTool::new(config, sandbox));
     registry
 }
 
@@ -259,13 +274,15 @@ pub async fn build_context(
     lookup_client: &reqwest::Client,
 ) -> context::ContextManager {
     let model_window = model_registry::resolve_context_window(config, lookup_client).await;
-
-    let budget = context::ContextBudget::new(
+    let dynamic_headroom = model_registry::resolve_headroom(
         model_window,
-        system_prompt,
-        tools,
-        config.effective_headroom(),
+        config.thinking_level.as_deref(),
+        &config.active_model,
     );
+    let effective_headroom = config.response_headroom.unwrap_or(dynamic_headroom);
+
+    let budget =
+        context::ContextBudget::new(model_window, system_prompt, tools, effective_headroom);
 
     tracing::info!(
         model_window,
@@ -402,6 +419,23 @@ pub fn print_status_card(
             .fg(Color::DarkGrey)
             .add_attribute(Attribute::Bold),
         Cell::new(&skills_str).fg(Color::White),
+    ]);
+    let (tele_text, tele_color) = if let Some(mgr) = crate::core::TelemetryManager::global() {
+        if mgr.is_enabled() {
+            ("Enabled (Logfire OTel)", Color::Green)
+        } else if mgr.get_token().is_some() {
+            ("Disabled (token saved)", Color::Yellow)
+        } else {
+            ("Disabled", Color::DarkGrey)
+        }
+    } else {
+        ("Disabled", Color::DarkGrey)
+    };
+    table.add_row(vec![
+        Cell::new("Telemetry")
+            .fg(Color::DarkGrey)
+            .add_attribute(Attribute::Bold),
+        Cell::new(tele_text).fg(tele_color),
     ]);
 
     if full_diagnostics {
@@ -558,8 +592,13 @@ fn redact_secrets(input: &str) -> String {
     }
     out = result;
 
-    // Pass 2 – HTTP header style:  xi-api-key: VALUE  /  Bearer VALUE
-    let header_triggers = ["xi-api-key:", "Authorization:", "bearer ", "Bearer "];
+    // Pass 2 – HTTP header style:  Authorization: Bearer VALUE  /  xi-api-key: VALUE  /  Bearer VALUE
+    let header_triggers = [
+        "authorization: bearer ",
+        "xi-api-key:",
+        "bearer ",
+        "authorization:",
+    ];
     for trigger in &header_triggers {
         let trigger_lower = trigger.to_lowercase();
         let mut new_out = String::with_capacity(out.len());
@@ -595,6 +634,19 @@ pub fn confirm_agent_action(
     description: &str,
     details: Option<&str>,
 ) -> Result<bool> {
+    use std::io::IsTerminal;
+    if is_auto_approve()
+        || !std::io::stdin().is_terminal()
+        || std::env::var("HELIX_YES")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+        || std::env::var("NON_INTERACTIVE")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+    {
+        return Ok(true);
+    }
+
     use comfy_table::modifiers::UTF8_ROUND_CORNERS;
     use comfy_table::presets::UTF8_BORDERS_ONLY;
     use comfy_table::{Attribute, Cell, Color, ColumnConstraint, Table, Width};
@@ -667,4 +719,33 @@ pub fn confirm_agent_action(
         .interact()?;
 
     Ok(allowed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wrap_text_preserves_empty_lines() {
+        let input = "First line\n\nSecond line with several words to wrap properly";
+        let wrapped = wrap_text(input, 20);
+        assert!(wrapped.contains(&String::new()), "Must preserve empty line");
+        assert!(wrapped.len() >= 3);
+    }
+
+    #[test]
+    fn test_wrap_text_single_short_line() {
+        let input = "Short line";
+        let wrapped = wrap_text(input, 50);
+        assert_eq!(wrapped, vec!["Short line"]);
+    }
+
+    #[test]
+    fn test_redact_secrets_in_payload() {
+        let input = "API_KEY=sk-1234567890abcdef and Authorization: Bearer secret_token_xyz";
+        let redacted = redact_secrets(input);
+        assert!(!redacted.contains("sk-1234567890abcdef"));
+        assert!(!redacted.contains("secret_token_xyz"));
+        assert!(redacted.contains("***REDACTED***"));
+    }
 }

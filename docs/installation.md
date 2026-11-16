@@ -147,3 +147,37 @@ Helix maintains configuration and indexing states under standard user directorie
 
 ### Customizing active instructions (Skills)
 Store guidelines, style guides, or API specifications in markdown or plain-text files under the `skills/` subdirectory within the data directories listed above. These are automatically loaded at boot time.
+
+---
+
+## 📡 5. Enabling OpenTelemetry & Logfire Telemetry
+
+Helix includes built-in OpenTelemetry tracing backed by [Pydantic Logfire](https://pydantic.dev/logfire) to record agent turns, tool invocations, token counts, and training signals.
+
+### 1. In the REPL (Fastest)
+Start Helix and run:
+```text
+/telemetry on
+```
+Helix will prompt for your Logfire write token (format: `pylf_v...`) and immediately persist it to your configuration.
+
+### 2. Via the Setup Wizard
+Run `helix config`, select **`Configure Logfire telemetry`**, and toggle it to enabled.
+
+### 3. Via `config.toml`
+Add your write token directly to your `config.toml`:
+```toml
+enable_telemetry = true
+logfire_token = "pylf_v1_us_your_token_here"
+```
+
+### 4. Via Environment Variable or Headless Flag
+```bash
+# Export token via environment variable
+export LOGFIRE_TOKEN="pylf_v1_us_your_token_here"
+
+# Execute a headless turn with tracing enabled
+helix run "Summarize recent commits" --yes --trace
+```
+
+For full telemetry documentation, noise filtering details, and machine learning dataset extraction recipes, see [docs/telemetry.md](telemetry.md).

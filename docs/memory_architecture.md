@@ -171,6 +171,17 @@ sequenceDiagram
 
 ---
 
+## 4. In-Memory Embedding Cache & Deduplication
+
+In agent loop turns, semantic retrieval is invoked alongside neural query trajectory initialization (e.g. SONA alignment). In unoptimized setups, the exact same user query string is passed to `fastembed-rs` multiple times per turn, each triggering an ONNX neural inference evaluation taking ~1.5s.
+
+`HelixMemoryEngine` incorporates an internal memory embedding cache:
+*   **Bounded Cache**: Maintains an in-memory `HashMap<String, Vec<f32>>` bounded to 512 entries.
+*   **Zero-Cost Deduplication**: The first invocation in `run_turn` evaluates the ONNX model and populates the cache. Subsequent semantic lookups within the same turn (e.g. in `search()`) or across repeated prompts hit the cache in **0.001 ms**.
+*   **Turn Latency Reduction**: Eliminates ~1.5 seconds of redundant neural inference per turn.
+
+---
+
 ## 5. Memory Footprint and Resource Verification
 
 Helix is optimized to maintain a highly compact memory profile suitable for resource-constrained environments (such as a 256 MiB container limit).

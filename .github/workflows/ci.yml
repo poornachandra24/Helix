@@ -5,6 +5,8 @@ on:
     branches: [ main ]
     paths:
       - 'src/**'
+      - 'ruvector-sona/**'
+      - 'scripts/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/ci.yml'
@@ -12,6 +14,8 @@ on:
     branches: [ main ]
     paths:
       - 'src/**'
+      - 'ruvector-sona/**'
+      - 'scripts/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/ci.yml'
@@ -181,7 +185,7 @@ jobs:
           key: ${{ matrix.os }}-test
 
       - name: Cache HuggingFace Models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .hf_cache
           key: ${{ runner.os }}-hf-models-v1
@@ -207,4 +211,74 @@ jobs:
           fi
 
       - name: Run Test Suite
-        run: cargo test --all-targets --all-features
+        run: cargo test --workspace
+
+  coverage:
+    name: Code Coverage
+    needs: detect-changes
+    if: needs.detect-changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install OpenBLAS & gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev gfortran
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-latest-coverage
+
+      - name: Generate Code Coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Output Coverage Summary to Step Summary
+        run: |
+          echo "### Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cargo llvm-cov report --summary-only >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-report
+          path: lcov.info
+
+  ci-success:
+    name: CI Succeeded
+    needs: [detect-changes, check-format, security-audit, clippy, test, coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Statuses
+        run: |
+          if [ "${{ needs.detect-changes.outputs.docs_only }}" = "true" ]; then
+            echo "Documentation-only change. CI succeeded."
+            exit 0
+          fi
+
+          for status in \
+            "${{ needs.check-format.result }}" \
+            "${{ needs.security-audit.result }}" \
+            "${{ needs.clippy.result }}" \
+            "${{ needs.test.result }}" \
+            "${{ needs.coverage.result }}"; do
+            if [ "$status" != "success" ]; then
+              echo "Error: One or more required checks failed ($status)!"
+              exit 1
+            fi
+          done
+
+          echo "All CI checks passed successfully."

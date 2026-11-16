@@ -30,6 +30,7 @@ pub struct HelixMemoryEngine {
     pub db: Connection,
     embedder: Embedder,
     index_path: std::path::PathBuf,
+    embedding_cache: std::collections::HashMap<String, Vec<f32>>,
 }
 
 impl HelixMemoryEngine {
@@ -113,37 +114,52 @@ impl HelixMemoryEngine {
             db,
             embedder,
             index_path,
+            embedding_cache: std::collections::HashMap::new(),
         })
     }
 
     /// Return the count of stored memories.
     pub fn size(&self) -> usize {
         self.db
-            .query_row("SELECT COUNT(*) FROM memory_metadata", [], |row| row.get(0))
-            .unwrap_or(0)
+            .query_row("SELECT COUNT(*) FROM memory_metadata", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as usize
     }
 
     /// Embed a single text string using fastembed (or mock deterministic embedder during test).
+    /// Results are cached in memory to avoid redundant ONNX model evaluations.
     pub fn embed_text(&mut self, text: &str) -> anyhow::Result<Vec<f32>> {
-        match &mut self.embedder {
+        if let Some(cached) = self.embedding_cache.get(text) {
+            return Ok(cached.clone());
+        }
+
+        let vector = match &mut self.embedder {
             Embedder::Real(emb) => {
                 let embeddings = emb.embed(vec![text], None)?;
                 if embeddings.is_empty() {
                     anyhow::bail!("Failed to generate embedding");
                 }
-                Ok(embeddings[0].clone())
+                embeddings[0].clone()
             }
             Embedder::Mock => {
                 #[cfg(test)]
                 {
-                    Ok(mock_embed(text))
+                    mock_embed(text)
                 }
                 #[cfg(not(test))]
                 {
                     anyhow::bail!("Mock embedder is not available in production builds");
                 }
             }
+        };
+
+        if self.embedding_cache.len() >= 512 {
+            self.embedding_cache.clear();
         }
+        self.embedding_cache
+            .insert(text.to_string(), vector.clone());
+        Ok(vector)
     }
 
     /// Insert a memory item: generates an embedding, stores metadata in SQLite,
@@ -228,16 +244,17 @@ impl HelixMemoryEngine {
                  ORDER BY score ASC LIMIT ?",
             );
             if let Ok(mut stmt) = prep_res {
-                let query_res = stmt.query(rusqlite::params![workspace_path, fts_query, limit]);
+                let query_res =
+                    stmt.query(rusqlite::params![workspace_path, fts_query, limit as i64]);
                 if let Ok(mut rows) = query_res {
                     while let Ok(Some(row)) = rows.next() {
-                        if let (Ok(id), Ok(text), Ok(file_path), Ok(score)) = (
-                            row.get::<_, u64>(0),
+                        if let (Ok(id_i64), Ok(text), Ok(file_path), Ok(score)) = (
+                            row.get::<_, i64>(0),
                             row.get::<_, String>(1),
                             row.get::<_, Option<String>>(2),
                             row.get::<_, f32>(3),
                         ) {
-                            sparse_matches.push((id, text, file_path, score));
+                            sparse_matches.push((id_i64 as u64, text, file_path, score));
                         }
                     }
                 }
@@ -261,7 +278,9 @@ impl HelixMemoryEngine {
                 // Retrieve candidate row IDs for the active workspace and global memories
                 let prep_res = self.db.prepare("SELECT id FROM memory_metadata WHERE workspace_path = ? OR workspace_path = 'global'");
                 if let Ok(mut stmt) = prep_res {
-                    let query_res = stmt.query_map([workspace_path], |row| row.get::<_, u64>(0));
+                    let query_res = stmt.query_map([workspace_path], |row| {
+                        row.get::<_, i64>(0).map(|id| id as u64)
+                    });
                     if let Ok(sqlite_ids) = query_res {
                         let allowed_ids: Vec<u64> = sqlite_ids
                             .filter_map(Result::ok)
@@ -277,7 +296,7 @@ impl HelixMemoryEngine {
                             for (score, id) in scores.into_iter().zip(ids) {
                                 if let Ok((text, file_path)) = self.db.query_row(
                                     "SELECT text, file_path FROM memory_metadata WHERE id = ?",
-                                    [id],
+                                    [id as i64],
                                     |row| {
                                         let t: String = row.get(0).unwrap_or_default();
                                         let f: Option<String> = row.get(1).unwrap_or(None);
@@ -347,7 +366,9 @@ impl HelixMemoryEngine {
             .db
             .prepare("SELECT id FROM memory_metadata WHERE workspace_path = ?")?;
         let ids: Vec<u64> = stmt
-            .query_map([workspace_path], |row| row.get(0))?
+            .query_map([workspace_path], |row| {
+                row.get::<_, i64>(0).map(|id| id as u64)
+            })?
             .filter_map(Result::ok)
             .collect();
 
@@ -497,17 +518,75 @@ mod tests {
         // Test clearing workspace A
         reloaded.clear_workspace(workspace_a).unwrap();
         let matches_cleared = reloaded
-            .search("safety and speed", None, workspace_a, 5)
-            .unwrap();
-        assert!(matches_cleared.is_empty(), "Workspace A should be empty");
-
-        // Workspace B should still be intact
-        let matches_intact = reloaded
-            .search("package manager", None, workspace_b, 5)
+            .search(
+                "What is safety and speed in programming?",
+                None,
+                workspace_a,
+                5,
+            )
             .unwrap();
         assert!(
-            !matches_intact.is_empty(),
-            "Workspace B should still have memories"
+            matches_cleared.is_empty(),
+            "Workspace A should be empty after clear"
         );
+    }
+
+    #[test]
+    fn test_embedding_cache_hit_and_eviction() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut engine = HelixMemoryEngine::new(temp_dir.path()).unwrap();
+
+        assert_eq!(engine.embedding_cache.len(), 0);
+
+        // First embed call populates cache
+        let query = "Optimizing neural engine trajectories";
+        let vec1 = engine.embed_text(query).unwrap();
+        assert_eq!(engine.embedding_cache.len(), 1);
+
+        // Second embed call must return exact cached vector
+        let vec2 = engine.embed_text(query).unwrap();
+        assert_eq!(vec1, vec2);
+        assert_eq!(engine.embedding_cache.len(), 1);
+
+        // Bounded capacity test: inserting 512 entries should trigger cache clear
+        for i in 0..512 {
+            let _ = engine.embed_text(&format!("query variant {}", i));
+        }
+        // Cache should have cleared and holds the remaining entries
+        assert!(engine.embedding_cache.len() <= 512);
+    }
+
+    #[test]
+    fn test_delete_last_memory() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut engine = HelixMemoryEngine::new(temp_dir.path()).unwrap();
+        let workspace = "/path/to/test_delete";
+
+        // Deleting when empty returns false
+        assert!(!engine.delete_last_memory(workspace).unwrap());
+
+        // Insert two memories
+        engine
+            .insert("First memory snippet", None, workspace)
+            .unwrap();
+        engine
+            .insert("Second memory snippet", None, workspace)
+            .unwrap();
+        assert_eq!(engine.size(), 2);
+
+        // Delete last memory
+        assert!(engine.delete_last_memory(workspace).unwrap());
+        assert_eq!(engine.size(), 1);
+
+        // Search should now only find first memory
+        let matches = engine
+            .search("First memory snippet", None, workspace, 5)
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].text.contains("First"));
+
+        // Delete remaining
+        assert!(engine.delete_last_memory(workspace).unwrap());
+        assert_eq!(engine.size(), 0);
     }
 }

@@ -12,6 +12,7 @@ use ruvector_sona::SonaEngine;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
+use tracing::Instrument;
 
 use super::context::ContextManager;
 use super::metrics::{MetricsCollector, TurnTimer};
@@ -97,6 +98,8 @@ pub struct Engine {
     pub sona: Option<Arc<SonaEngine>>,
     pub core_tools: std::collections::HashMap<String, Arc<dyn crate::tools::Tool>>,
     pub dynamic_registry: crate::tools::SharedRegistryState,
+    pub enable_reflection: bool,
+    pub is_headless: bool,
 }
 
 impl Engine {
@@ -121,7 +124,28 @@ impl Engine {
             sona: None,
             core_tools,
             dynamic_registry,
+            enable_reflection: true,
+            is_headless: false,
         }
+    }
+
+    pub fn with_reflection(mut self, enabled: bool) -> Self {
+        self.enable_reflection = enabled;
+        self
+    }
+
+    pub fn with_headless(mut self, headless: bool) -> Self {
+        self.is_headless = headless;
+        self
+    }
+
+    pub fn with_max_iterations(mut self, iters: usize) -> Self {
+        self.max_iterations = iters;
+        self
+    }
+
+    pub fn scratchpad_path(&self) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("helix_scratchpad_{}.md", self.session.id))
     }
 
     /// Dynamically updates the engine's active tool registry at runtime.
@@ -335,10 +359,41 @@ impl Engine {
                         let _ = tx.send(format!("\x1b[SExecuting {}...", call.name));
                     }
                 }
-                let result = match self.tools.dispatch(&call.name, call.args.clone()).await {
-                    Ok(r) => r,
-                    Err(e) => format!("Error in tool '{}': {}", call.name, e),
+
+                let tool_span = tracing::info_span!(
+                    "tool_call",
+                    tool.name = %call.name,
+                    tool.id = %call.id,
+                    tool.args = %call.args,
+                    tool.success = tracing::field::Empty,
+                    tool.output = tracing::field::Empty,
+                    tool.error = tracing::field::Empty,
+                    dataset.is_training_signal = true,
+                );
+
+                let (result, is_ok) = {
+                    let span_clone = tool_span.clone();
+                    async {
+                        match self.tools.dispatch(&call.name, call.args.clone()).await {
+                            Ok(r) => (r, true),
+                            Err(e) => (format!("Error in tool '{}': {}", call.name, e), false),
+                        }
+                    }
+                    .instrument(span_clone)
+                    .await
                 };
+
+                tool_span.record("tool.success", is_ok);
+                if !is_ok {
+                    tool_span.record("tool.error", result.as_str());
+                }
+                let preview = if result.len() > 2048 {
+                    format!("{}... (truncated)", &result[..2048])
+                } else {
+                    result.clone()
+                };
+                tool_span.record("tool.output", preview.as_str());
+
                 results.push((call, result));
             }
             results
@@ -353,13 +408,41 @@ impl Engine {
             for call in &calls {
                 let name = call.name.clone();
                 let args = call.args.clone();
+                let id = call.id.clone();
                 let registry = Arc::clone(&self.tools);
-                handles.push(tokio::spawn(async move {
-                    registry
-                        .dispatch(&name, args)
-                        .await
-                        .unwrap_or_else(|e| format!("Error in tool '{}': {}", name, e))
-                }));
+
+                let tool_span = tracing::info_span!(
+                    "tool_call",
+                    tool.name = %name,
+                    tool.id = %id,
+                    tool.args = %args,
+                    tool.success = tracing::field::Empty,
+                    tool.output = tracing::field::Empty,
+                    tool.error = tracing::field::Empty,
+                    dataset.is_training_signal = true,
+                );
+                let span_for_instrument = tool_span.clone();
+
+                handles.push(tokio::spawn(
+                    async move {
+                        let (res, is_ok) = match registry.dispatch(&name, args).await {
+                            Ok(r) => (r, true),
+                            Err(e) => (format!("Error in tool '{}': {}", name, e), false),
+                        };
+                        tool_span.record("tool.success", is_ok);
+                        if !is_ok {
+                            tool_span.record("tool.error", res.as_str());
+                        }
+                        let preview = if res.len() > 2048 {
+                            format!("{}... (truncated)", &res[..2048])
+                        } else {
+                            res.clone()
+                        };
+                        tool_span.record("tool.output", preview.as_str());
+                        res
+                    }
+                    .instrument(span_for_instrument),
+                ));
             }
 
             let mut results = Vec::new();
@@ -384,8 +467,27 @@ impl Engine {
     ///
     /// `stream_tx`: if `Some`, text tokens for the final answer are sent through
     /// this channel as they arrive so the REPL can print them progressively.
-    #[tracing::instrument(skip(self, system_prompt, stream_tx),
-        fields(model = %self.model.model_name(), provider = %self.model.provider_name()))]
+    #[tracing::instrument(
+        skip(self, system_prompt, stream_tx),
+        fields(
+            session_id = %self.session.id,
+            gen_ai.conversation.id = %self.session.id,
+            turn = tracing::field::Empty,
+            model = %self.model.model_name(),
+            provider = %self.model.provider_name(),
+            output = tracing::field::Empty,
+            output_len = tracing::field::Empty,
+            tool_calls_count = tracing::field::Empty,
+            steps_count = tracing::field::Empty,
+            sona_quality = tracing::field::Empty,
+            dataset.is_training_signal = true,
+            dataset.quality_tier = tracing::field::Empty,
+            dataset.tools_used = tracing::field::Empty,
+            dataset.has_healer_retries = tracing::field::Empty,
+            dataset.healer_retry_count = tracing::field::Empty,
+            dataset.is_successful = tracing::field::Empty,
+        )
+    )]
     pub async fn run_turn(
         &mut self,
         system_prompt: &str,
@@ -393,6 +495,7 @@ impl Engine {
         stream_tx: Option<UnboundedSender<String>>,
     ) -> Result<String> {
         let turn_index = self.metrics.as_ref().map(|m| m.turn_count()).unwrap_or(0);
+        tracing::Span::current().record("turn", turn_index);
         let timer = TurnTimer::start(input);
 
         // Per-turn counters — accumulated across all steps in this turn
@@ -418,14 +521,28 @@ impl Engine {
         let cleaned_trimmed = cleaned.strip_suffix('?').unwrap_or(&cleaned).trim();
         let mut cache_hit: Option<String> = None;
 
-        for (q, r) in GREETINGS {
-            if cleaned == *q || cleaned_trimmed == *q {
-                cache_hit = Some((*r).to_string());
-                break;
+        // Never intercept greetings in headless/benchmark mode, or on longer prompts
+        if !self.is_headless && input.split_whitespace().count() <= 3 && input.len() <= 30 {
+            for (q, r) in GREETINGS {
+                if cleaned == *q || cleaned_trimmed == *q {
+                    cache_hit = Some((*r).to_string());
+                    break;
+                }
             }
         }
 
         if let Some(response) = cache_hit {
+            let span = tracing::Span::current();
+            span.record("output", response.as_str());
+            span.record("output_len", response.len());
+            span.record("tool_calls_count", 0usize);
+            span.record("steps_count", 0usize);
+            span.record("dataset.quality_tier", "high");
+            span.record("dataset.tools_used", "");
+            span.record("dataset.has_healer_retries", false);
+            span.record("dataset.healer_retry_count", 0usize);
+            span.record("dataset.is_successful", true);
+
             // Echo inputs to local session/global logs
             self.global_messages
                 .push(json!({"role": "user", "content": input}));
@@ -479,7 +596,7 @@ impl Engine {
 
         // Ensure no stale scratchpad is left over at the start of the turn.
         // It will be dynamically re-initialized in run_turn_inner if the agent calls any tools.
-        let _ = std::fs::remove_file(".helix_scratchpad.md");
+        let _ = std::fs::remove_file(self.scratchpad_path());
 
         // 1. Retrieve relevant workspace memories and append them to the system prompt
         let mut final_system_prompt = system_prompt.to_string();
@@ -605,6 +722,7 @@ impl Engine {
         }
 
         // Finalize SONA Trajectory
+        let mut recorded_quality: Option<f32> = None;
         if let (Some(sona_engine), Some(mut trajectory)) = (self.sona.clone(), sona_trajectory) {
             let is_err = result.is_err();
             let mut quality = 1.0f32;
@@ -618,6 +736,7 @@ impl Engine {
                 quality = 0.0;
             }
             let final_quality = quality.clamp(0.0, 1.0);
+            recorded_quality = Some(final_quality);
 
             // Compute target embedding based on retrieved memories
             let mut avg_target = vec![0.0f32; 384];
@@ -681,6 +800,56 @@ impl Engine {
             }
         }
 
+        let span = tracing::Span::current();
+        let is_ok = result.is_ok();
+        match &result {
+            Ok(text) => {
+                let preview = if text.len() > 4096 {
+                    format!("{}... (truncated)", &text[..4096])
+                } else {
+                    text.clone()
+                };
+                span.record("output", preview.as_str());
+                span.record("output_len", text.len());
+            }
+            Err(e) => {
+                span.record("output", format!("ERROR: {e}").as_str());
+                span.record("output_len", 0usize);
+            }
+        }
+        span.record("tool_calls_count", turn_tool_calls);
+        span.record("steps_count", turn_steps);
+        if let Some(q) = recorded_quality {
+            span.record("sona_quality", q as f64);
+        }
+
+        let quality_tier = match recorded_quality {
+            Some(q) if q >= 0.8 => "high",
+            Some(q) if q >= 0.5 => "medium",
+            Some(_) => "low",
+            None => {
+                if is_ok && turn_healer_retries == 0 {
+                    "high"
+                } else if is_ok {
+                    "medium"
+                } else {
+                    "low"
+                }
+            }
+        };
+        span.record("dataset.quality_tier", quality_tier);
+
+        let mut unique_tools = executed_tools.clone();
+        unique_tools.sort();
+        unique_tools.dedup();
+        let tools_used = unique_tools.join(",");
+        span.record("dataset.tools_used", tools_used.as_str());
+
+        span.record("dataset.has_healer_retries", turn_healer_retries > 0);
+        span.record("dataset.healer_retry_count", turn_healer_retries);
+        span.record("dataset.is_successful", is_ok);
+
+        let _ = std::fs::remove_file(self.scratchpad_path());
         result
     }
 
@@ -781,7 +950,7 @@ impl Engine {
                 }
             }
 
-            if let Ok(scratchpad_content) = std::fs::read_to_string(".helix_scratchpad.md") {
+            if let Ok(scratchpad_content) = std::fs::read_to_string(self.scratchpad_path()) {
                 if !scratchpad_content.trim().is_empty() {
                     step_system_prompt.push_str(&format!(
                         "\n\n### ACTIVE WORKSPACE SCRATCHPAD & PLANNING LOG:\n{}\n",
@@ -810,13 +979,14 @@ impl Engine {
                     if let Some(ref tx) = stream_tx {
                         let _ = tx.send("\x1b[R".to_string());
                     }
-                    // Initialize the workspace scratchpad on the fly when the first tool is called
-                    if !std::path::Path::new(".helix_scratchpad.md").exists() {
+                    // Initialize the workspace scratchpad on the fly in temp dir when the first tool is called
+                    let sp_path = self.scratchpad_path();
+                    if !sp_path.exists() {
                         let scratchpad_header = format!(
                             "# Helix Scratchpad & Planning Log\n\n**Current Goal**: {}\n",
                             input
                         );
-                        let _ = std::fs::write(".helix_scratchpad.md", &scratchpad_header);
+                        let _ = std::fs::write(&sp_path, &scratchpad_header);
                     }
                     for call in &calls {
                         executed_tools.push(call.name.clone());
@@ -875,11 +1045,12 @@ impl Engine {
                             "content":      content,
                         }));
                     }
-                    // Self-Correction & Planning Reflection logic (Runs on every step if scratchpad exists - meaning it's a complex query)
-                    let scratchpad_exists = std::path::Path::new(".helix_scratchpad.md").exists();
-                    if scratchpad_exists {
-                        let is_error_reflection = !step_failures.is_empty();
-
+                    // Self-Correction & Planning Reflection logic
+                    // Only run reflection if enabled and an error actually occurred, avoiding 2x inference tax on successful steps
+                    let sp_path = self.scratchpad_path();
+                    let scratchpad_exists = sp_path.exists();
+                    let is_error_reflection = !step_failures.is_empty();
+                    if self.enable_reflection && scratchpad_exists && is_error_reflection {
                         // 1. Send warning/status to the user
                         if let Some(ref tx) = stream_tx {
                             let status_msg = if is_error_reflection {
@@ -1025,7 +1196,7 @@ impl Engine {
                                         input, reflection_section
                                     );
                                     let _ =
-                                        std::fs::write(".helix_scratchpad.md", clean_scratchpad);
+                                        std::fs::write(self.scratchpad_path(), clean_scratchpad);
 
                                     let guidance_msg = format!(
                                         "[System Note - Self-Correction Strategy]:\nCurrent State: {}\nTarget State: {}\nStrategy: {}\nFollow this strategy to close the gap.",
@@ -1062,7 +1233,7 @@ impl Engine {
                                         reflection_text.trim()
                                     );
                                     let _ =
-                                        std::fs::write(".helix_scratchpad.md", clean_scratchpad);
+                                        std::fs::write(self.scratchpad_path(), clean_scratchpad);
 
                                     let guidance_msg = format!(
                                         "[System Note - Self-Correction Strategy]:\n{}",
@@ -1110,5 +1281,71 @@ mod tests {
             0.0,
         ];
         assert!((cosine_similarity(&a, &d) - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_greetings_cache_entries() {
+        assert!(!GREETINGS.is_empty());
+        let greetings_keys: Vec<&str> = GREETINGS.iter().map(|(q, _)| *q).collect();
+        assert!(greetings_keys.contains(&"hi"));
+        assert!(greetings_keys.contains(&"hello"));
+        assert!(greetings_keys.contains(&"who are you"));
+    }
+
+    #[test]
+    fn test_scratchpad_path_format() {
+        let tools = ToolRegistry::new();
+        let session = crate::core::persistence::Session::new(Some("test_session_12345")).unwrap();
+        let budget = crate::core::context::ContextBudget::new(4096, "system prompt", &[], 2048);
+        let context = ContextManager::new(budget);
+        let model = Box::new(crate::model::OpenAiCompatibleAdapter::new(
+            crate::config::AppConfig::default(),
+        ));
+        let dynamic_registry = Arc::new(std::sync::Mutex::new(
+            crate::tools::DynamicRegistryState::default(),
+        ));
+        let engine = Engine::new(
+            model,
+            context,
+            tools,
+            session,
+            std::collections::HashMap::new(),
+            dynamic_registry,
+        );
+
+        let path = engine.scratchpad_path();
+        assert!(
+            path.to_string_lossy()
+                .contains("helix_scratchpad_test_session_12345.md")
+        );
+    }
+
+    #[test]
+    fn test_engine_builder_methods() {
+        let tools = ToolRegistry::new();
+        let session = crate::core::persistence::Session::new(None).unwrap();
+        let budget = crate::core::context::ContextBudget::new(4096, "system prompt", &[], 2048);
+        let context = ContextManager::new(budget);
+        let model = Box::new(crate::model::OpenAiCompatibleAdapter::new(
+            crate::config::AppConfig::default(),
+        ));
+        let dynamic_registry = Arc::new(std::sync::Mutex::new(
+            crate::tools::DynamicRegistryState::default(),
+        ));
+        let engine = Engine::new(
+            model,
+            context,
+            tools,
+            session,
+            std::collections::HashMap::new(),
+            dynamic_registry,
+        )
+        .with_headless(true)
+        .with_reflection(false)
+        .with_max_iterations(10);
+
+        assert!(engine.is_headless);
+        assert!(!engine.enable_reflection);
+        assert_eq!(engine.max_iterations, 10);
     }
 }

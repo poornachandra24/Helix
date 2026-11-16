@@ -535,8 +535,20 @@ struct AccumulatedToolCall {
 
 #[async_trait]
 impl ModelAdapter for OpenAiCompatibleAdapter {
-    #[tracing::instrument(skip(self, messages, tools, stream_tx),
-        fields(provider = %self.config.active_provider, model = %self.config.active_model))]
+    #[tracing::instrument(
+        skip(self, messages, tools, stream_tx),
+        fields(
+            provider = %self.config.active_provider,
+            model = %self.config.active_model,
+            gen_ai.system = %self.config.active_provider,
+            gen_ai.request.model = %self.config.active_model,
+            gen_ai.usage.input_tokens = tracing::field::Empty,
+            gen_ai.usage.output_tokens = tracing::field::Empty,
+            gen_ai.usage.total_tokens = tracing::field::Empty,
+            response_type = tracing::field::Empty,
+            dataset.is_training_signal = true,
+        )
+    )]
     async fn call(
         &self,
         system_prompt: &str,
@@ -678,17 +690,51 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                     "content": null,
                     "tool_calls": tool_calls_json,
                 });
+                tracing::Span::current().record(
+                    "response_type",
+                    format!("tool_calls({})", calls.len()).as_str(),
+                );
                 Ok(ModelResponse::ToolCalls(calls, normalized_message))
             } else {
                 if let Some(resp) = self.try_parse_markdown_tool_call(&full_text) {
+                    tracing::Span::current().record("response_type", "markdown_tool_call");
                     return Ok(resp);
                 }
+                tracing::Span::current().record("response_type", "end_turn");
                 Ok(ModelResponse::EndTurn(full_text))
             }
         } else {
             let resp: Value = resp_val.json().await?;
             tracing::debug!(response = %resp, "Raw model response");
+
+            let span = tracing::Span::current();
+            if let Some(usage) = resp.get("usage") {
+                if let Some(prompt) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
+                    span.record("gen_ai.usage.input_tokens", prompt);
+                }
+                if let Some(completion) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
+                    span.record("gen_ai.usage.output_tokens", completion);
+                }
+                if let Some(total) = usage.get("total_tokens").and_then(|v| v.as_u64()) {
+                    span.record("gen_ai.usage.total_tokens", total);
+                }
+            }
+
             let model_response = self.parse_response(&resp, format)?;
+            match &model_response {
+                ModelResponse::EndTurn(_) => {
+                    span.record("response_type", "end_turn");
+                }
+                ModelResponse::ToolCalls(calls, _) => {
+                    span.record(
+                        "response_type",
+                        format!("tool_calls({})", calls.len()).as_str(),
+                    );
+                }
+                ModelResponse::ParseError { .. } => {
+                    span.record("response_type", "parse_error");
+                }
+            }
 
             // Replay text through the streaming channel so the REPL gets a
             // typewriter effect without requiring real SSE parsing.
@@ -716,5 +762,116 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         if let Ok(mut w) = self.thinking_level.write() {
             *w = level;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn make_test_adapter() -> OpenAiCompatibleAdapter {
+        OpenAiCompatibleAdapter::new(AppConfig::default())
+    }
+
+    #[test]
+    fn test_parse_response_end_turn() {
+        let adapter = make_test_adapter();
+        let resp = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello, how can I help you today?"
+                }
+            }]
+        });
+
+        let parsed = adapter
+            .parse_response(&resp, &ApiFormat::OpenAiCompatible)
+            .unwrap();
+        match parsed {
+            ModelResponse::EndTurn(text) => {
+                assert_eq!(text, "Hello, how can I help you today?");
+            }
+            _ => panic!("Expected EndTurn response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_response_tool_calls() {
+        let adapter = make_test_adapter();
+        let resp = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"Cargo.toml\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let parsed = adapter
+            .parse_response(&resp, &ApiFormat::OpenAiCompatible)
+            .unwrap();
+        match parsed {
+            ModelResponse::ToolCalls(calls, msg) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].id, "call_123");
+                assert_eq!(calls[0].args["path"], "Cargo.toml");
+                assert!(msg["tool_calls"].is_array());
+            }
+            _ => panic!("Expected ToolCalls response"),
+        }
+    }
+
+    #[test]
+    fn test_try_parse_markdown_tool_call() {
+        let adapter = make_test_adapter();
+        let markdown = r#"
+I will inspect the project file now.
+```json
+{
+  "name": "read_file",
+  "arguments": {
+    "path": "src/main.rs"
+  }
+}
+```
+"#;
+
+        let parsed = adapter
+            .try_parse_markdown_tool_call(markdown)
+            .expect("Should extract markdown tool call");
+        match parsed {
+            ModelResponse::ToolCalls(calls, _) => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].args["path"], "src/main.rs");
+            }
+            _ => panic!("Expected ToolCalls response"),
+        }
+    }
+
+    #[test]
+    fn test_parse_response_api_error() {
+        let adapter = make_test_adapter();
+        let resp = json!({
+            "error": {
+                "message": "Quota exceeded or invalid API key",
+                "type": "insufficient_quota"
+            }
+        });
+
+        let result = adapter.parse_response(&resp, &ApiFormat::OpenAiCompatible);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Quota exceeded"));
     }
 }

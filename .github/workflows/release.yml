@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +24,10 @@ jobs:
             archive_ext: "tar.gz"
           - os: macos-latest
             target: aarch64-apple-darwin
+            suffix: ""
+            archive_ext: "tar.gz"
+          - os: macos-13
+            target: x86_64-apple-darwin
             suffix: ""
             archive_ext: "tar.gz"
           - os: windows-latest
@@ -97,13 +102,13 @@ jobs:
           "$hash  helix-${{ matrix.target }}.zip" | Out-File -FilePath helix-${{ matrix.target }}.zip.sha256 -Encoding ascii
 
       - name: Upload Build Archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helix-archive-${{ matrix.target }}
           path: helix-${{ matrix.target }}.${{ matrix.archive_ext }}
 
       - name: Upload Checksum
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helix-checksum-${{ matrix.target }}
           path: helix-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
@@ -119,7 +124,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: helix-*
           path: artifacts
@@ -155,7 +160,7 @@ jobs:
           '
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release_files/*.tar.gz
@@ -185,25 +190,27 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
-      - name: Extract Tag Version
-        id: get_version
+      - name: Extract Tag Version and Lowercase Owner
+        id: meta
         run: |
           TAG=${{ github.ref_name }}
           VERSION=${TAG#v}
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "owner=${OWNER}" >> $GITHUB_OUTPUT
 
       - name: Build and Push Docker Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/helix:latest
-            ghcr.io/${{ github.repository_owner }}/helix:${{ steps.get_version.outputs.version }}
+            ghcr.io/${{ steps.meta.outputs.owner }}/helix:latest
+            ghcr.io/${{ steps.meta.outputs.owner }}/helix:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Verify Docker Image Execution
         run: |
-          docker run --rm ghcr.io/${{ github.repository_owner }}/helix:${{ steps.get_version.outputs.version }} --version
+          docker run --rm ghcr.io/${{ steps.meta.outputs.owner }}/helix:${{ steps.meta.outputs.version }} --version

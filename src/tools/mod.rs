@@ -14,6 +14,7 @@ pub mod builtins;
 
 pub mod mcp;
 pub mod sandbox;
+pub mod workflow;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -105,6 +106,7 @@ impl Default for ToolRegistry {
     }
 }
 
+#[derive(Default)]
 pub struct DynamicRegistryState {
     pub all_mcp_tools: HashMap<String, Arc<dyn Tool>>,
     pub all_skills: HashMap<String, String>, // name -> content

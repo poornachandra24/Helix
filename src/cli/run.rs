@@ -14,14 +14,71 @@ use crate::tools::sandbox;
 
 use super::helpers::{
     build_context, build_model, build_tool_registry, init_mcp_tools, load_sona_state,
-    save_sona_state,
+    save_sona_state, set_auto_approve,
 };
 
-pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()> {
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    pub goal: String,
+    pub yes: bool,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub no_memory: bool,
+    pub no_reflection: bool,
+    pub max_iterations: usize,
+    pub output_trajectory: Option<String>,
+}
+
+pub async fn run_single(app_config: &config::AppConfig, opts: RunOptions) -> Result<()> {
+    let mut effective_config = app_config.clone();
+
+    if opts.yes {
+        set_auto_approve(true);
+    }
+
+    if let Some(ref m) = opts.model {
+        effective_config.active_model = m.clone();
+    }
+
+    if let Some(ref p) = opts.provider {
+        effective_config.active_provider = p.clone();
+    }
+
+    if opts.api_key.is_some() || opts.api_base.is_some() {
+        if let Some(active) = effective_config
+            .providers
+            .iter_mut()
+            .find(|p| p.name == effective_config.active_provider)
+        {
+            if let Some(ref key) = opts.api_key {
+                active.api_key = Some(key.clone());
+            }
+            if let Some(ref base) = opts.api_base {
+                active.base_url = base.clone();
+            }
+        } else {
+            effective_config.providers.push(config::Provider {
+                name: effective_config.active_provider.clone(),
+                base_url: opts
+                    .api_base
+                    .clone()
+                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                api_key: opts.api_key.clone(),
+                api_format: config::ApiFormat::OpenAiCompatible,
+            });
+        }
+    }
+
     let data_dir = config::get_data_dir()?;
     let _skill_reg = skills::SkillRegistry::new(data_dir.join("skills"))?;
-    let sandbox = sandbox::SharedSandbox::new(app_config.sandbox_mode);
-    let mut tools = build_tool_registry(sandbox, data_dir.join("skills"));
+    let sandbox = sandbox::SharedSandbox::new(effective_config.sandbox_mode);
+    let mut tools = build_tool_registry(
+        sandbox.clone(),
+        data_dir.join("skills"),
+        effective_config.clone(),
+    );
 
     // Initialize MCP tools without automatically registering them into the active tool registry
     let (_mcp_registry, mcp_tools) = init_mcp_tools().await?;
@@ -76,44 +133,47 @@ pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()
         core_tools.insert(name.clone(), tool.clone());
     }
 
-    let memory_dir = data_dir.join("memory");
-    let memory_engine = memory::HelixMemoryEngine::new(&memory_dir)?;
+    let memory_engine = if !opts.no_memory {
+        let memory_dir = data_dir.join("memory");
+        memory::HelixMemoryEngine::new(&memory_dir).ok()
+    } else {
+        None
+    };
 
-    let base_system = "You are an autonomous AI agent with access to tools. \
-        Use the tools to accomplish the goal. \
-        When done, provide a clear final answer. \
-        CRITICAL FORMATTING RULES FOR TERMINAL ENVIRONMENT:\n\
-        1. DO NOT USE MARKDOWN TABLES (e.g. '| Header | Header |') because they get severely mangled and wrapped when displayed inside the terminal's narrow fixed-width box layout (typically 80-110 characters). Instead, represent tabular data using nested bullet points, bold key-value listings, or record blocks (e.g. '◆ Record 1:\n  * Key: Value').\n\
-        2. Keep horizontal lines and separators short. DO NOT output long horizontal line dashes like '------------------------------' or ASCII art. Keep horizontal dividers short, e.g., '---'.\n\
-        3. Prioritize concise, structured lists and paragraphs so the text reads beautifully on a terminal.\n\
-        4. When you need up-to-date facts, current news, search results, or information beyond your training cutoff (e.g. recent events, sports scores, or future events like the 2026 World Cup), you MUST use the 'web_search' tool FIRST. Do not guess, make up, or hallucinate details. Use 'web_search' to find search results, and then use 'web_fetch' on specific result URLs if you need to read the full page content.";
+    let base_system = "You are an autonomous AI software engineering agent with access to tools. \
+        Investigate the repository, locate relevant code and tests, use 'str_replace' to make precise, surgical changes, and run tests via 'bash' to verify your solution. \
+        When done, provide a clear summary of your fix and conclude without calling further tools.";
 
     let system_prompt = base_system.to_string();
 
     let lookup_client = crate::model::registry::build_lookup_client();
     let context = build_context(
-        app_config,
+        &effective_config,
         base_system,
         &tools.descriptors(),
         &lookup_client,
     )
     .await;
-    let model = build_model(app_config);
+    let model = build_model(&effective_config);
     let session = persistence::Session::new(None)?;
 
-    let sona_config = ruvector_sona::SonaConfig {
-        hidden_dim: 384,
-        embedding_dim: 384,
-        ..Default::default()
-    };
-    let sona_engine = ruvector_sona::SonaEngine::with_config(sona_config);
-    load_sona_state(&data_dir, &sona_engine);
-
     let mut engine = engine::Engine::new(model, context, tools, session, core_tools, dynamic_state)
-        .with_memory(memory_engine)
-        .with_sona(sona_engine);
+        .with_headless(true)
+        .with_reflection(!opts.no_reflection)
+        .with_max_iterations(opts.max_iterations);
 
-    println!("🚀 Running: {}\n", style(goal).bold());
+    if let Some(mem) = memory_engine {
+        let sona_config = ruvector_sona::SonaConfig {
+            hidden_dim: 384,
+            embedding_dim: 384,
+            ..Default::default()
+        };
+        let sona_engine = ruvector_sona::SonaEngine::with_config(sona_config);
+        load_sona_state(&data_dir, &sona_engine);
+        engine = engine.with_memory(mem).with_sona(sona_engine);
+    }
+
+    println!("🚀 Running: {}\n", style(&opts.goal).bold());
 
     // Streaming for non-interactive run too
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
@@ -134,17 +194,53 @@ pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()
         }
     });
 
-    tokio::select! {
-        res = engine.run_turn(&system_prompt, goal, Some(tx)) => {
+    let actual_mode = if effective_config.sandbox_mode == sandbox::SandboxMode::Worktree {
+        if sandbox::requires_worktree(&opts.goal) {
+            sandbox::SandboxMode::Worktree
+        } else {
+            sandbox::SandboxMode::Local
+        }
+    } else {
+        effective_config.sandbox_mode
+    };
+    sandbox.set_mode(actual_mode);
+
+    let run_res = tokio::select! {
+        res = engine.run_turn(&system_prompt, &opts.goal, Some(tx)) => {
             printer.await.ok();
             match res {
-                Ok(_) => println!("\n\n{}", style("✔ Done.").green().bold()),
-                Err(e) => println!("\n{}", style(format!("✘ Error: {}", e)).red()),
+                Ok(out) => {
+                    println!("\n\n{}", style("✔ Done.").green().bold());
+                    let _ = sandbox.finish_turn(true).await;
+                    Ok(out)
+                }
+                Err(e) => {
+                    println!("\n{}", style(format!("✘ Error: {}", e)).red());
+                    let _ = sandbox.finish_turn(false).await;
+                    Err(e)
+                }
             }
         }
         _ = tokio::signal::ctrl_c() => {
             printer.abort();
             println!("\n{}", style("[⛔ Cancelled]").red().bold());
+            let _ = sandbox.finish_turn(false).await;
+            anyhow::bail!("Execution cancelled by user")
+        }
+    };
+
+    if let Some(ref traj_path) = opts.output_trajectory {
+        let traj_json = serde_json::json!({
+            "goal": opts.goal,
+            "model": effective_config.active_model,
+            "provider": effective_config.active_provider,
+            "success": run_res.is_ok(),
+            "messages_count": engine.global_messages.len(),
+            "history": engine.global_messages
+        });
+        if let Ok(content) = serde_json::to_string_pretty(&traj_json) {
+            let _ = std::fs::write(traj_path, content);
+            println!("Trajectory exported to: {}", traj_path);
         }
     }
 
@@ -152,5 +248,10 @@ pub async fn run_single(app_config: &config::AppConfig, goal: &str) -> Result<()
         save_sona_state(&data_dir, sona);
     }
 
+    if let Some(telemetry) = crate::core::TelemetryManager::global() {
+        telemetry.flush().await;
+    }
+
+    let _ = run_res?;
     Ok(())
 }

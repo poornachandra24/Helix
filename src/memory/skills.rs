@@ -8,8 +8,14 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     pub fn new(skills_dir: PathBuf) -> Result<Self> {
-        if !skills_dir.exists() {
-            fs::create_dir_all(&skills_dir)?;
+        if !skills_dir.exists()
+            && let Err(_e) = fs::create_dir_all(&skills_dir)
+        {
+            let fallback = std::env::temp_dir().join("helix_skills");
+            let _ = fs::create_dir_all(&fallback);
+            return Ok(Self {
+                skills_dir: fallback,
+            });
         }
         Ok(Self { skills_dir })
     }

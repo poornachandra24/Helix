@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::EnvFilter;
 
 use helix::{cli, config};
 
@@ -21,6 +20,10 @@ struct Args {
     /// Resume a past session by ID
     #[arg(long, short)]
     resume: Option<String>,
+
+    /// Enable Logfire OpenTelemetry tracing
+    #[arg(long, alias = "logfire")]
+    trace: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -40,6 +43,46 @@ enum Command {
     Run {
         /// The goal or instruction to execute
         goal: String,
+
+        /// Automatically approve tool execution without interactive confirmation prompts
+        #[arg(short = 'y', long = "yes", alias = "non-interactive")]
+        yes: bool,
+
+        /// Model to use for this execution
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Provider name or endpoint to use
+        #[arg(short, long)]
+        provider: Option<String>,
+
+        /// API key override
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Base URL override
+        #[arg(long)]
+        api_base: Option<String>,
+
+        /// Disable local ONNX semantic memory and embeddings (lean benchmark mode)
+        #[arg(long)]
+        no_memory: bool,
+
+        /// Disable secondary LLM self-reflection calls to minimize harness tax
+        #[arg(long)]
+        no_reflection: bool,
+
+        /// Maximum agent tool loop iterations (default: 30)
+        #[arg(long, default_value_t = 30)]
+        max_iterations: usize,
+
+        /// Path to export execution trajectory JSON (for Harbor / evaluation leaderboards)
+        #[arg(long)]
+        output_trajectory: Option<String>,
+
+        /// Enable Logfire OpenTelemetry tracing for this run
+        #[arg(long, alias = "logfire")]
+        trace: bool,
     },
     /// Configure models and providers
     Config,
@@ -97,18 +140,26 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let mut app_config = config::load_config()?;
+
+    // Check if --trace was set on CLI
+    let trace_cli = args.trace || matches!(&args.cmd, Some(Command::Run { trace: true, .. }));
+    if trace_cli {
+        app_config.enable_telemetry = true;
+    }
+
     let log_level = match args.verbose {
         0 => "off",
         1 => "warn",
         2 => "info",
         _ => "debug",
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(format!("helix={}", log_level)))
-        .with_target(false)
-        .init();
 
-    let app_config = config::load_config()?;
+    let _telemetry = helix::core::TelemetryManager::init(
+        log_level,
+        app_config.enable_telemetry,
+        app_config.logfire_token.clone(),
+    )?;
 
     let resume_id = args.resume.clone().or_else(|| match &args.cmd {
         Some(Command::Chat { resume }) => resume.clone(),
@@ -116,7 +167,7 @@ async fn main() -> Result<()> {
         _ => None,
     });
 
-    match &args.cmd {
+    let res: Result<()> = match &args.cmd {
         Some(Command::Config) => {
             println!(
                 "Current: {} / {}",
@@ -125,7 +176,7 @@ async fn main() -> Result<()> {
             match config::interactive_setup(Some(app_config)) {
                 Ok(new_config) => {
                     println!(
-                        "✅ Now using: {} / {}",
+                        "Now using: {} / {}",
                         new_config.active_provider, new_config.active_model
                     );
                 }
@@ -133,20 +184,50 @@ async fn main() -> Result<()> {
                     println!("\nConfiguration cancelled.");
                 }
             }
+            Ok(())
         }
 
-        Some(Command::Run { goal }) => {
-            cli::run::run_single(&app_config, goal).await?;
+        Some(Command::Run {
+            goal,
+            yes,
+            model,
+            provider,
+            api_key,
+            api_base,
+            no_memory,
+            no_reflection,
+            max_iterations,
+            output_trajectory,
+            trace: _,
+        }) => {
+            let opts = cli::run::RunOptions {
+                goal: goal.clone(),
+                yes: *yes,
+                model: model.clone(),
+                provider: provider.clone(),
+                api_key: api_key.clone(),
+                api_base: api_base.clone(),
+                no_memory: *no_memory,
+                no_reflection: *no_reflection,
+                max_iterations: *max_iterations,
+                output_trajectory: output_trajectory.clone(),
+            };
+            cli::run::run_single(&app_config, opts).await
         }
 
         Some(Command::Chat { .. }) | Some(Command::Resume { .. }) | None => {
-            cli::repl::run_repl(app_config, resume_id).await?;
+            cli::repl::run_repl(app_config, resume_id).await
         }
 
         Some(Command::Uninstall) => {
             // Already handled above
+            Ok(())
         }
+    };
+
+    if let Some(telemetry) = helix::core::TelemetryManager::global() {
+        telemetry.shutdown().await;
     }
 
-    Ok(())
+    res
 }

@@ -13,6 +13,7 @@ pub enum SandboxMode {
     Docker,
     Wasm,
     SSH,
+    Worktree,
 }
 
 #[derive(Debug, Clone)]
@@ -34,15 +35,33 @@ pub trait SandboxBackend: Send + Sync {
 // Local Host Sandbox
 // ──────────────────────────────────────────────
 
-pub struct LocalSandbox;
+pub struct LocalSandbox {
+    pub base_dir: PathBuf,
+}
+
+impl LocalSandbox {
+    pub fn new(base_dir: PathBuf) -> Self {
+        Self { base_dir }
+    }
+}
 
 #[async_trait]
 impl SandboxBackend for LocalSandbox {
     async fn execute_command(&self, cmd: &str) -> Result<CommandResult> {
         let output = if cfg!(target_os = "windows") {
-            Command::new("cmd").arg("/c").arg(cmd).output().await?
+            Command::new("cmd")
+                .arg("/c")
+                .arg(cmd)
+                .current_dir(&self.base_dir)
+                .output()
+                .await?
         } else {
-            Command::new("sh").arg("-c").arg(cmd).output().await?
+            Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(&self.base_dir)
+                .output()
+                .await?
         };
         let exit_code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -55,8 +74,7 @@ impl SandboxBackend for LocalSandbox {
     }
 
     async fn read_file(&self, path: &str) -> Result<String> {
-        let current_dir = std::env::current_dir()?;
-        let real_path = resolve_and_validate_path(&current_dir, path)?;
+        let real_path = resolve_and_validate_path(&self.base_dir, path)?;
         let content = tokio::fs::read_to_string(&real_path)
             .await
             .map_err(|e| anyhow::anyhow!("Cannot read file '{}': {}", path, e))?;
@@ -64,8 +82,7 @@ impl SandboxBackend for LocalSandbox {
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<()> {
-        let current_dir = std::env::current_dir()?;
-        let real_path = resolve_and_validate_path(&current_dir, path)?;
+        let real_path = resolve_and_validate_path(&self.base_dir, path)?;
         if let Some(parent) = real_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -74,8 +91,7 @@ impl SandboxBackend for LocalSandbox {
     }
 
     async fn list_dir(&self, path: &str, max_depth: usize) -> Result<String> {
-        let current_dir = std::env::current_dir()?;
-        let real_path = resolve_and_validate_path(&current_dir, path)?;
+        let real_path = resolve_and_validate_path(&self.base_dir, path)?;
         let mut out = String::new();
         list_dir_recursive(&real_path, 0, max_depth, &mut out)?;
         Ok(out)
@@ -489,15 +505,94 @@ impl SandboxBackend for WasmSandbox {
 // Shared Dynamic Sandbox Dispatcher
 // ──────────────────────────────────────────────
 
+pub fn requires_worktree(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    let keywords = &[
+        "fix",
+        "implement",
+        "add",
+        "modify",
+        "write",
+        "create",
+        "test",
+        "build",
+        "run",
+        "refactor",
+        "change",
+        "update",
+        "delete",
+        "remove",
+        "clean",
+        "compile",
+        "cargo",
+        "harness",
+        "patch",
+        "edit",
+        "setup",
+    ];
+    keywords.iter().any(|&kw| lower.contains(kw))
+}
+
+struct WorktreeGuard {
+    original_dir: PathBuf,
+    worktree_path: PathBuf,
+    branch_name: String,
+}
+
+impl Drop for WorktreeGuard {
+    fn drop(&mut self) {
+        let original_dir = self.original_dir.clone();
+        let worktree_path = self.worktree_path.clone();
+        let branch_name = self.branch_name.clone();
+
+        std::thread::spawn(move || {
+            // Remove worktree
+            let _ = std::process::Command::new("git")
+                .arg("worktree")
+                .arg("remove")
+                .arg("--force")
+                .arg(&worktree_path)
+                .current_dir(&original_dir)
+                .output();
+
+            // Delete temporary branch
+            let _ = std::process::Command::new("git")
+                .arg("branch")
+                .arg("-D")
+                .arg(&branch_name)
+                .current_dir(&original_dir)
+                .output();
+        });
+    }
+}
+
+struct WorktreeInfo {
+    path: PathBuf,
+    _guard: Arc<WorktreeGuard>,
+}
+
 #[derive(Clone)]
 pub struct SharedSandbox {
     mode: Arc<std::sync::RwLock<SandboxMode>>,
+    original_dir: PathBuf,
+    worktree_state: Arc<tokio::sync::Mutex<Option<WorktreeInfo>>>,
 }
 
 impl SharedSandbox {
     pub fn new(mode: SandboxMode) -> Self {
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             mode: Arc::new(std::sync::RwLock::new(mode)),
+            original_dir,
+            worktree_state: Arc::new(tokio::sync::Mutex::new(None)),
+        }
+    }
+
+    pub fn new_with_dir(mode: SandboxMode, original_dir: PathBuf) -> Self {
+        Self {
+            mode: Arc::new(std::sync::RwLock::new(mode)),
+            original_dir,
+            worktree_state: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -510,6 +605,156 @@ impl SharedSandbox {
     pub fn get_mode(&self) -> SandboxMode {
         self.mode.read().map(|r| *r).unwrap_or(SandboxMode::Local)
     }
+
+    async fn ensure_worktree(&self) -> Result<PathBuf> {
+        let mut lock = self.worktree_state.lock().await;
+        if let Some(ref info) = *lock {
+            return Ok(info.path.clone());
+        }
+
+        let is_git = std::process::Command::new("git")
+            .arg("rev-parse")
+            .arg("--is-inside-work-tree")
+            .current_dir(&self.original_dir)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if !is_git {
+            tracing::warn!("Not inside a git repository. Falling back to original directory.");
+            return Ok(self.original_dir.clone());
+        }
+
+        let repo_name = self
+            .original_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("helix-repo");
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let branch_name = format!("helix-agent-{:x}", nanos);
+
+        let worktrees_base = if let Ok(val) = std::env::var("HELIX_WORKTREE_DIR") {
+            PathBuf::from(val)
+        } else if let Some(base_dirs) = directories::BaseDirs::new() {
+            let candidate = base_dirs.home_dir().join(".worktrees");
+            if std::fs::create_dir_all(&candidate).is_ok() {
+                candidate
+            } else {
+                std::env::temp_dir().join(".helix_worktrees")
+            }
+        } else {
+            std::env::temp_dir().join(".helix_worktrees")
+        };
+        let worktree_path = worktrees_base.join(repo_name).join(&branch_name);
+
+        if let Some(parent) = worktree_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let output = tokio::process::Command::new("git")
+            .arg("worktree")
+            .arg("add")
+            .arg(&worktree_path)
+            .arg("-b")
+            .arg(&branch_name)
+            .current_dir(&self.original_dir)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(
+                "Failed to create git worktree: {}. Falling back to original directory.",
+                stderr
+            );
+            return Ok(self.original_dir.clone());
+        }
+
+        let files_to_copy = vec![
+            ".env",
+            "mcp_config.json",
+            ".cargo/config.toml",
+            "Cargo.lock",
+        ];
+
+        for file in files_to_copy {
+            let src = self.original_dir.join(file);
+            if src.exists() {
+                let dest = worktree_path.join(file);
+                if let Some(parent) = dest.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                let _ = tokio::fs::copy(&src, &dest).await;
+            }
+        }
+
+        let guard = Arc::new(WorktreeGuard {
+            original_dir: self.original_dir.clone(),
+            worktree_path: worktree_path.clone(),
+            branch_name: branch_name.clone(),
+        });
+
+        *lock = Some(WorktreeInfo {
+            path: worktree_path.clone(),
+            _guard: guard,
+        });
+
+        Ok(worktree_path)
+    }
+
+    pub async fn sync_changes_back(&self) -> Result<()> {
+        let lock = self.worktree_state.lock().await;
+        if let Some(ref info) = *lock {
+            let output = tokio::process::Command::new("git")
+                .arg("status")
+                .arg("--porcelain")
+                .current_dir(&info.path)
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                anyhow::bail!("Failed to get git status in worktree");
+            }
+
+            let status_str = String::from_utf8_lossy(&output.stdout);
+            for line in status_str.lines() {
+                if line.len() < 4 {
+                    continue;
+                }
+                let status_code = &line[..2];
+                let file_path_str = &line[3..];
+                let file_path_str = file_path_str.trim_matches('"');
+
+                let src = info.path.join(file_path_str);
+                let dest = self.original_dir.join(file_path_str);
+
+                if status_code.contains('D') {
+                    if dest.exists() {
+                        let _ = tokio::fs::remove_file(&dest).await;
+                    }
+                } else if src.exists() {
+                    if let Some(parent) = dest.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    tokio::fs::copy(&src, &dest).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn finish_turn(&self, success: bool) -> Result<()> {
+        if success && let Err(e) = self.sync_changes_back().await {
+            tracing::error!("Failed to sync worktree changes back: {}", e);
+        }
+        let mut lock = self.worktree_state.lock().await;
+        *lock = None;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -517,7 +762,15 @@ impl SandboxBackend for SharedSandbox {
     async fn execute_command(&self, cmd: &str) -> Result<CommandResult> {
         let mode = self.get_mode();
         match mode {
-            SandboxMode::Local => LocalSandbox.execute_command(cmd).await,
+            SandboxMode::Local => {
+                LocalSandbox::new(self.original_dir.clone())
+                    .execute_command(cmd)
+                    .await
+            }
+            SandboxMode::Worktree => {
+                let wt_path = self.ensure_worktree().await?;
+                LocalSandbox::new(wt_path).execute_command(cmd).await
+            }
             SandboxMode::Docker => DockerSandbox::new().execute_command(cmd).await,
             SandboxMode::Wasm => WasmSandbox::new().execute_command(cmd).await,
             SandboxMode::SSH => anyhow::bail!("SSH sandbox mode is not implemented yet"),
@@ -527,7 +780,19 @@ impl SandboxBackend for SharedSandbox {
     async fn read_file(&self, path: &str) -> Result<String> {
         let mode = self.get_mode();
         match mode {
-            SandboxMode::Local => LocalSandbox.read_file(path).await,
+            SandboxMode::Local => {
+                LocalSandbox::new(self.original_dir.clone())
+                    .read_file(path)
+                    .await
+            }
+            SandboxMode::Worktree => {
+                let wt_path = {
+                    let lock = self.worktree_state.lock().await;
+                    lock.as_ref().map(|info| info.path.clone())
+                };
+                let base = wt_path.unwrap_or_else(|| self.original_dir.clone());
+                LocalSandbox::new(base).read_file(path).await
+            }
             SandboxMode::Docker => DockerSandbox::new().read_file(path).await,
             SandboxMode::Wasm => WasmSandbox::new().read_file(path).await,
             SandboxMode::SSH => anyhow::bail!("SSH sandbox mode is not implemented yet"),
@@ -537,7 +802,15 @@ impl SandboxBackend for SharedSandbox {
     async fn write_file(&self, path: &str, content: &str) -> Result<()> {
         let mode = self.get_mode();
         match mode {
-            SandboxMode::Local => LocalSandbox.write_file(path, content).await,
+            SandboxMode::Local => {
+                LocalSandbox::new(self.original_dir.clone())
+                    .write_file(path, content)
+                    .await
+            }
+            SandboxMode::Worktree => {
+                let wt_path = self.ensure_worktree().await?;
+                LocalSandbox::new(wt_path).write_file(path, content).await
+            }
             SandboxMode::Docker => DockerSandbox::new().write_file(path, content).await,
             SandboxMode::Wasm => WasmSandbox::new().write_file(path, content).await,
             SandboxMode::SSH => anyhow::bail!("SSH sandbox mode is not implemented yet"),
@@ -547,7 +820,19 @@ impl SandboxBackend for SharedSandbox {
     async fn list_dir(&self, path: &str, max_depth: usize) -> Result<String> {
         let mode = self.get_mode();
         match mode {
-            SandboxMode::Local => LocalSandbox.list_dir(path, max_depth).await,
+            SandboxMode::Local => {
+                LocalSandbox::new(self.original_dir.clone())
+                    .list_dir(path, max_depth)
+                    .await
+            }
+            SandboxMode::Worktree => {
+                let wt_path = {
+                    let lock = self.worktree_state.lock().await;
+                    lock.as_ref().map(|info| info.path.clone())
+                };
+                let base = wt_path.unwrap_or_else(|| self.original_dir.clone());
+                LocalSandbox::new(base).list_dir(path, max_depth).await
+            }
             SandboxMode::Docker => DockerSandbox::new().list_dir(path, max_depth).await,
             SandboxMode::Wasm => WasmSandbox::new().list_dir(path, max_depth).await,
             SandboxMode::SSH => anyhow::bail!("SSH sandbox mode is not implemented yet"),
@@ -674,7 +959,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_sandbox_command() {
-        let sandbox = LocalSandbox;
+        let sandbox = LocalSandbox::new(std::env::current_dir().unwrap());
         let res = sandbox.execute_command("echo 'hello world'").await.unwrap();
         assert_eq!(res.exit_code, 0);
         assert!(res.stdout.contains("hello world"));
@@ -682,23 +967,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_sandbox_file_ops() {
-        let sandbox = LocalSandbox;
         let current_dir = std::env::current_dir().unwrap();
         let dir = tempfile::Builder::new().tempdir_in(&current_dir).unwrap();
-        let file_path = dir.path().join("test.txt");
-        let path_str = file_path.to_str().unwrap();
+        let sandbox = LocalSandbox::new(dir.path().to_path_buf());
+        let file_path = "test.txt";
 
         sandbox
-            .write_file(path_str, "sandbox test content")
+            .write_file(file_path, "sandbox test content")
             .await
             .unwrap();
-        let content = sandbox.read_file(path_str).await.unwrap();
+        let content = sandbox.read_file(file_path).await.unwrap();
         assert_eq!(content, "sandbox test content");
 
-        let listing = sandbox
-            .list_dir(dir.path().to_str().unwrap(), 1)
-            .await
-            .unwrap();
+        let listing = sandbox.list_dir(".", 1).await.unwrap();
         assert!(listing.contains("test.txt"));
     }
 
@@ -746,5 +1027,63 @@ mod tests {
         assert_eq!(res.exit_code, 0);
 
         let _ = tokio::fs::remove_file(wasm_file_path).await;
+    }
+
+    #[tokio::test]
+    async fn test_worktree_sandbox_lifecycle() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_dir = temp_dir.path().join("repo");
+        let _ = std::fs::create_dir_all(&repo_dir);
+
+        let init_ok = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&repo_dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !init_ok {
+            return;
+        }
+
+        // Configure git user and commit an initial file so HEAD exists for git worktree
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&repo_dir)
+            .status();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&repo_dir)
+            .status();
+        let dummy = repo_dir.join("init.txt");
+        let _ = std::fs::write(&dummy, "init");
+        let _ = std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&repo_dir)
+            .status();
+        let _ = std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&repo_dir)
+            .status();
+
+        let worktree_dir = temp_dir.path().join("worktrees");
+        unsafe {
+            std::env::set_var("HELIX_WORKTREE_DIR", &worktree_dir);
+        }
+        let worktree_sb = SharedSandbox::new_with_dir(SandboxMode::Worktree, repo_dir.clone());
+
+        let test_file = "test_worktree_file.txt";
+        let res = worktree_sb.write_file(test_file, "temporary content").await;
+        if res.is_ok() {
+            let content = worktree_sb.read_file(test_file).await.unwrap();
+            assert_eq!(content, "temporary content");
+
+            let orig_file_path = repo_dir.join(test_file);
+            assert!(!orig_file_path.exists());
+
+            worktree_sb.finish_turn(true).await.unwrap();
+            assert!(orig_file_path.exists());
+            let synced = std::fs::read_to_string(&orig_file_path).unwrap();
+            assert_eq!(synced, "temporary content");
+        }
     }
 }

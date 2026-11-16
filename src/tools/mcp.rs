@@ -3,7 +3,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::{
     Peer,
-    model::{CallToolRequestParams, RawContent, ResourceContents},
+    model::{CallToolRequestParams, ContentBlock, ResourceContents},
     serve_client,
     service::{RoleClient, RunningService},
     transport::TokioChildProcess,
@@ -72,11 +72,11 @@ impl Tool for McpWrappedTool {
 
         let mut text = String::new();
         for content_block in &result.content {
-            match &content_block.raw {
-                RawContent::Text(t) => {
+            match content_block {
+                ContentBlock::Text(t) => {
                     text.push_str(&t.text);
                 }
-                RawContent::Resource(r) => {
+                ContentBlock::Resource(r) => {
                     if let ResourceContents::TextResourceContents { text: t, .. } = &r.resource {
                         text.push_str(t);
                     }
