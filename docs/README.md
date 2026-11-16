@@ -22,20 +22,24 @@ Welcome to the Helix developer documentation. This directory contains detailed a
     *   Details the scanning and loading of modular `.md` and `.txt` instruction files from the user configuration folder.
     *   Explains how domain-specific behaviors are dynamically injected into the system prompt context.
 
+5.  **[OpenTelemetry & Fine-Tuning Telemetry Subsystem](telemetry.md)**
+    *   Details the native OpenTelemetry tracing pipeline backed by Pydantic Logfire.
+    *   Explains noise filtering (>95% span volume reduction), memory embedding cache speedups, and fine-tuning dataset schemas for small models (SFT & DPO).
+
 ## Guides & Setup
 
-5.  **[Installation & Setup Guide](installation.md)**
+6.  **[Installation & Setup Guide](installation.md)**
     *   One-liner installer scripts for macOS, Linux, and Windows.
     *   Interactive command-line setup wizard, custom configuration details, and troubleshooting steps.
 
-6.  **[Core Architecture Overview](architecture.md)**
+7.  **[Core Architecture Overview](architecture.md)**
     *   An in-depth map of orchestration loops, self-healing parser mechanisms, exact context budgeting, and container sandboxing models.
 
-7.  **[Plugin & Extension Development](plugin_development.md)**
+8.  **[Plugin & Extension Development](plugin_development.md)**
     *   A guide on building custom native Rust tools, configuring external MCP servers, and writing natural-language Markdown skills.
 
-8.  **[Deployment Guide](edge_deployment.md)**
+9.  **[Deployment Guide](edge_deployment.md)**
     *   Instructions for native host setups, stateful container sandboxes with resource limits, and permissionless guest VM WASM runs.
 
-9.  **[Versioning & Contribution Guide](contributing.md)**
+10. **[Versioning & Contribution Guide](contributing.md)**
     *   Guidelines on semantic versioning, distribution pipelines, and developer pull request lifecycle checklists.

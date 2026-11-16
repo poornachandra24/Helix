@@ -99,3 +99,26 @@ Helix integrates a dual-store semantic memory model with localized query alignme
     *   Tunes queries on the fly utilizing an embedding projection matrix (Micro-LoRA rank 8 alignment).
     *   Uses **Elastic Weight Consolidation (EWC)** to consolidate task parameters without catastrophic forgetting.
     *   Applies **L2 Regularization** (configured via `ewc_lambda`) to ensure weights stay within safe mathematical bounds.
+
+---
+
+## 5. OpenTelemetry & Logfire Tracing Subsystem (`telemetry.rs`)
+
+Helix integrates a native, non-blocking OpenTelemetry layer backed by Pydantic Logfire:
+
+*   **Asynchronous Channel Pipeline**: Spans from engine execution loops, tool dispatches, and model calls are routed via an internal Tokio `mpsc::unbounded_channel` to a background batching exporter, preventing network I/O from introducing latency into user REPL turns.
+*   **Target Noise Filtering**: Standard subscriber layers often collect thousands of micro-spans from low-level dependencies. Helix enforces an explicit `EnvFilter` directly on the OpenTelemetry layer (`helix=info,ruvector_sona=info,tokenizers=off,hyper=off,reqwest=off`), eliminating character-level tokenizer replacements and socket polling spans (>95% reduction in trace payload).
+*   **Synchronized Flush & Shutdown**: Short-lived commands (`helix run --trace`) utilize `telemetry.flush().await` with `tokio::sync::oneshot` channels to ensure zero span loss upon process exit.
+*   **Dynamic Configuration**: Telemetry can be toggled on/off and configured with API tokens at runtime via `/telemetry` without restarting the process.
+
+---
+
+## 6. Agent Trajectory Telemetry for Model Fine-Tuning (SFT & DPO)
+
+Every executed turn is structured to serve directly as high-signal dataset examples for fine-tuning small language models (1B–8B parameters):
+
+*   **SFT Trajectory Structure**: Spans capture the prompt (`input`), model thoughts/step iterations, structured tool calls (`tool.name`, `tool.args`), environment observations (`tool.output`, `tool.error`), and final completion (`output`).
+*   **Preference Alignment (DPO/RLHF)**: Each turn is labeled with `dataset.quality_tier` (`"high"`, `"medium"`, `"low"`) derived from SONA reinforcement quality scores and self-healing retry counters, enabling direct extraction of `chosen` vs `rejected` pairs.
+*   **Fast Extraction**: Spans are tagged with `dataset.is_training_signal = true` and `dataset.tools_used` for 1-line SQL extraction over Logfire's DataFusion MCP interface.
+
+For full schema definitions and SQL queries, see [docs/telemetry.md](telemetry.md).

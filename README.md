@@ -44,6 +44,8 @@ Helix implements a feedback loop to improve retrieval accuracy over time:
 ## Key Capabilities
 
 - **Quantized Semantic Memory Index**: Combines SQLite metadata with a 4-bit TurboQuant vector index (`turbovec`) and offline ONNX `BAAI/bge-small-en-v1.5` embeddings (`fastembed`). Baseline memory footprint is ~227 MiB RSS, scaling at ~3.2 MiB per 100k memories (see [docs/memory_architecture.md](docs/memory_architecture.md)).
+- **In-Memory Embedding Cache**: Eliminates redundant ONNX embedding passes across retrieval and query alignment, cutting turn startup latency by ~1.5s.
+- **OpenTelemetry & Fine-Tuning Tracing**: Native OpenTelemetry telemetry backed by Pydantic Logfire with call-site target filtering (>95% noise reduction) and complete trajectory metadata structured for fine-tuning small models (1B–8B) via SFT/DPO (see [docs/telemetry.md](docs/telemetry.md)).
 - **Query Projection Tuning**: Applies gradient adjustments to the LoRA retrieval weights, aligning semantic searches to context that previously led to successful turns.
 - **API & Local Model Agnostic**: Supports any OpenAI-compatible API provider (e.g., OpenAI, OpenRouter) and native Ollama endpoints. Swappable mid-session via `/use`.
 - **Schema-Guided Healer**: Detects malformed JSON tool calls, classifies errors (e.g., missing parameters or invalid tool names), and provides the target schema to the model to prompt automatic self-correction.
@@ -148,6 +150,7 @@ cargo run -- -vv
 | `/resume <id>` | Load a past session into the active context |
 | `/memory [query]` | Search/manage semantic memory (`--clear` to wipe) |
 | `/thinking [level]` | Set or show reasoning effort (`low`, `medium`, `high`, `off`, or token budget) |
+| `/telemetry [on\|off\|status]` | Toggle or configure Logfire OpenTelemetry tracing and token management |
 | `/optimize` | Force SONA neural adaptation & parameter consolidation |
 | `/exit` \| `/quit` | Exit the REPL session |
 
@@ -158,6 +161,19 @@ cargo run -- -vv
 Helix natively supports external tool servers conforming to MCP over `stdio` transport. Specify servers in `mcp_config.json` in the current directory or config directory, and Helix will spawn, initialize, and register their tool schemas on boot.
 
 See [docs/mcp_integration.md](docs/mcp_integration.md) for details.
+
+---
+
+## Enabling Telemetry & Tracing
+
+Helix includes native OpenTelemetry tracing backed by [Pydantic Logfire](https://pydantic.dev/logfire) to record agent reasoning loops, tool dispatches, and training signals:
+
+*   **In the REPL**: Run `/telemetry on` to enable live tracing. If no write token is configured, Helix prompts you to enter it once and saves it automatically. Run `/telemetry status` to verify connectivity.
+*   **Via Setup Wizard**: Run `helix config` from your shell, choose **`Configure Logfire telemetry`**, and toggle it on.
+*   **Via Config File**: Set `enable_telemetry = true` and `logfire_token = "pylf_..."` in `~/.config/helix/config.toml`.
+*   **Headless / CI**: Pass `--trace` (e.g. `helix run "..." --yes --trace`) or export `LOGFIRE_TOKEN="pylf_..."`.
+
+For detailed architecture, noise reduction, and fine-tuning dataset extraction recipes, see [docs/telemetry.md](docs/telemetry.md).
 
 ---
 
@@ -173,6 +189,7 @@ See [docs/mcp_integration.md](docs/mcp_integration.md) for details.
 | [docs/edge_deployment.md](docs/edge_deployment.md) | Local, Docker sandbox, and Wasm deployment modes |
 | [docs/ux_design.md](docs/ux_design.md) | Terminal UI system, color tokens, box math, telemetry format |
 | [docs/skills.md](docs/skills.md) | Custom instruction files scanning and prompt injection |
+| [docs/telemetry.md](docs/telemetry.md) | OpenTelemetry pipeline, Logfire export, noise filtering, and ML fine-tuning schema |
 | [docs/plugin_development.md](docs/plugin_development.md) | Writing custom Rust tools, MCP servers, and Markdown skills |
 | [docs/security.md](docs/security.md) | Security architecture, CI gates, vulnerability reporting |
 

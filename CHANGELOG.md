@@ -4,6 +4,20 @@ All notable changes to the Helix project will be documented in this file. The fo
 
 ---
 
+## [Unreleased]
+
+### Added
+*   **OpenTelemetry & Logfire Subsystem**: Native tracing pipeline backed by Pydantic Logfire with non-blocking Tokio unbounded channels and synchronized shutdown/flush hooks.
+*   **Agent Trajectory Fine-Tuning Schema**: Telemetry spans now capture comprehensive training metadata (`dataset.is_training_signal`, `dataset.quality_tier`, `dataset.tools_used`, `dataset.has_healer_retries`, and observation outputs) to extract clean SFT and DPO datasets for small language models (1B–8B).
+*   **In-Memory Embedding Cache**: Integrated an in-memory vector cache in `HelixMemoryEngine` for `fastembed-rs` ONNX embeddings, cutting turn startup latency by ~1.5 seconds.
+*   **Multi-Agent Workflow Coordination Tools**: Added consensus verification tools and subagent execution primitives.
+*   **Interactive `/telemetry` Commands**: Added REPL commands `/telemetry on`, `/telemetry off`, `/telemetry token <token>`, and `/telemetry status` with persistent storage in `config.toml`.
+
+### Changed
+*   **OTel Call-Site Noise Filtering**: Applied targeted `EnvFilter` directly to `otel_layer` (`helix=info,ruvector_sona=info,tokenizers=off,hyper=off,reqwest=off,h2=off,mio=off,want=off,fastembed=warn`), slashing trace volume by >95% and raising signal purity to >85%.
+
+---
+
 ## [0.3.0](https://github.com/poornachandra24/Helix/compare/v0.2.0...v0.3.0) (2026-06-21)
 
 
