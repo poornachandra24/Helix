@@ -28,8 +28,16 @@ fi
 for file in $CHANGED_FILES; do
   # If the file is not a Rust file, it must be a doc/markdown file or ignored
   if [[ ! "$file" =~ \.rs$ ]]; then
-    # Allow .md, docs/, LICENSE, README, .agents.md, etc.
-    if [[ "$file" =~ \.md$ ]] || [[ "$file" =~ ^docs/ ]] || [[ "$file" == "LICENSE" ]] || [[ "$file" == "ROADMAP.md" ]] || [[ "$file" == "CHANGELOG.md" ]] || [[ "$file" == "CHECKLIST.md" ]] || [[ "$file" == ".agents.md" ]]; then
+    # Allow .md, docs/, LICENSE, README, .agents.md, workflow docs, etc.
+    if [[ "$file" =~ \.md$ ]] || \
+       [[ "$file" =~ ^docs/ ]] || \
+       [[ "$file" == "LICENSE" ]] || \
+       [[ "$file" == "ROADMAP.md" ]] || \
+       [[ "$file" == "CHANGELOG.md" ]] || \
+       [[ "$file" == "CHECKLIST.md" ]] || \
+       [[ "$file" == ".agents.md" ]] || \
+       [[ "$file" == ".github/workflows/pages.yml" ]] || \
+       [[ "$file" =~ \.(png|jpg|jpeg|gif|svg|webp|ico|html|css)$ ]]; then
       continue
     else
       echo "Non-documentation file changed: $file"
