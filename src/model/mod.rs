@@ -381,6 +381,7 @@ impl OpenAiCompatibleAdapter {
         line: &str,
         format: &ApiFormat,
         full_text: &mut String,
+        full_reasoning: &mut String,
         acc_tool_calls: &mut Vec<AccumulatedToolCall>,
         stream_tx: &Option<UnboundedSender<String>>,
     ) -> Result<()> {
@@ -426,9 +427,11 @@ impl OpenAiCompatibleAdapter {
                         .or_else(|| delta.get("thought"))
                         .and_then(|v| v.as_str())
                         && !reasoning.is_empty()
-                        && let Some(tx) = stream_tx
                     {
-                        let _ = tx.send(format!("\x1b[H{}", reasoning));
+                        full_reasoning.push_str(reasoning);
+                        if let Some(tx) = stream_tx {
+                            let _ = tx.send(format!("\x1b[H{}", reasoning));
+                        }
                     }
 
                     // Text content
@@ -481,9 +484,11 @@ impl OpenAiCompatibleAdapter {
                     .or_else(|| message.get("thought"))
                     .and_then(|v| v.as_str())
                     && !reasoning.is_empty()
-                    && let Some(tx) = stream_tx
                 {
-                    let _ = tx.send(format!("\x1b[H{}", reasoning));
+                    full_reasoning.push_str(reasoning);
+                    if let Some(tx) = stream_tx {
+                        let _ = tx.send(format!("\x1b[H{}", reasoning));
+                    }
                 }
 
                 if let Some(content) = message.get("content").and_then(|v| v.as_str()) {
@@ -609,6 +614,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         if streaming {
             let mut stream = resp_val.bytes_stream();
             let mut full_text = String::new();
+            let mut full_reasoning = String::new();
             let mut acc_tool_calls: Vec<AccumulatedToolCall> = Vec::new();
             let mut line_buf = Vec::new();
 
@@ -623,6 +629,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                                 &line,
                                 format,
                                 &mut full_text,
+                                &mut full_reasoning,
                                 &mut acc_tool_calls,
                                 &stream_tx,
                             )?;
@@ -639,6 +646,7 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                         &line,
                         format,
                         &mut full_text,
+                        &mut full_reasoning,
                         &mut acc_tool_calls,
                         &stream_tx,
                     )?;
@@ -685,18 +693,26 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
                     tool_calls_json.push(tc_val);
                 }
 
-                let normalized_message = json!({
+                let mut normalized_message = json!({
                     "role": "assistant",
-                    "content": null,
+                    "content": if full_text.is_empty() { Value::Null } else { json!(full_text) },
                     "tool_calls": tool_calls_json,
                 });
+                if !full_reasoning.is_empty() {
+                    normalized_message["reasoning_content"] = json!(full_reasoning);
+                }
                 tracing::Span::current().record(
                     "response_type",
                     format!("tool_calls({})", calls.len()).as_str(),
                 );
                 Ok(ModelResponse::ToolCalls(calls, normalized_message))
             } else {
-                if let Some(resp) = self.try_parse_markdown_tool_call(&full_text) {
+                if let Some(mut resp) = self.try_parse_markdown_tool_call(&full_text) {
+                    if !full_reasoning.is_empty()
+                        && let ModelResponse::ToolCalls(_, ref mut norm) = resp
+                    {
+                        norm["reasoning_content"] = json!(full_reasoning);
+                    }
                     tracing::Span::current().record("response_type", "markdown_tool_call");
                     return Ok(resp);
                 }
@@ -873,5 +889,28 @@ I will inspect the project file now.
         let result = adapter.parse_response(&resp, &ApiFormat::OpenAiCompatible);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Quota exceeded"));
+    }
+
+    #[test]
+    fn test_stream_line_preserves_reasoning_content() {
+        let adapter = make_test_adapter();
+        let line = r#"data: {"choices":[{"delta":{"reasoning_content":"Step 1: Check files. "}}]}"#;
+        let mut full_text = String::new();
+        let mut full_reasoning = String::new();
+        let mut tool_calls = Vec::new();
+
+        adapter
+            .process_stream_line(
+                line,
+                &ApiFormat::OpenAiCompatible,
+                &mut full_text,
+                &mut full_reasoning,
+                &mut tool_calls,
+                &None,
+            )
+            .expect("Should process line successfully");
+
+        assert_eq!(full_reasoning, "Step 1: Check files. ");
+        assert!(full_text.is_empty());
     }
 }

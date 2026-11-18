@@ -140,7 +140,7 @@ impl Engine {
     }
 
     pub fn with_max_iterations(mut self, iters: usize) -> Self {
-        self.max_iterations = iters;
+        self.max_iterations = if iters == 0 { usize::MAX } else { iters };
         self
     }
 
