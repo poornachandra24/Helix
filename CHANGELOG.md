@@ -4,6 +4,19 @@ All notable changes to the Helix project will be documented in this file. The fo
 
 ---
 
+## [0.5.0](https://github.com/poornachandra24/Helix/compare/v0.4.0...v0.5.0) (2026-11-18)
+
+
+### Features
+
+* add harness leaderboard compatibility, reasoning_content preservation, and model limits CLI flags ([#30](https://github.com/poornachandra24/Helix/issues/30)) ([8d927ed](https://github.com/poornachandra24/Helix/commit/8d927ed75d6547d4109703d6e4e539286cbc6940))
+* Logfire OpenTelemetry, fine-tuning trajectory schema, CI/CD hardening, and CVE remediation ([#26](https://github.com/poornachandra24/Helix/issues/26)) ([6161e7b](https://github.com/poornachandra24/Helix/commit/6161e7b39daa9cb1f127a6b7718c56f527c52279))
+
+
+### Bug Fixes
+
+* **ruvector-sona:** ensure non-zero latency in trajectory builder test on high-speed macOS runners ([#29](https://github.com/poornachandra24/Helix/issues/29)) ([460fb83](https://github.com/poornachandra24/Helix/commit/460fb83405da24d655fdf84077cb19653b3bf008))
+
 ## [Unreleased]
 
 ### Added
