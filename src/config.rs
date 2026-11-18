@@ -315,17 +315,6 @@ pub fn normalize_ollama_cloud_providers(config: &mut AppConfig) -> bool {
 }
 
 pub fn load_config() -> Result<AppConfig> {
-    let config_file = get_config_dir()?.join("config.toml");
-    if config_file.exists() {
-        let content = fs::read_to_string(&config_file)?;
-        if let Ok(mut config) = toml::from_str::<AppConfig>(&content) {
-            if normalize_ollama_cloud_providers(&mut config) {
-                let _ = config.save();
-            }
-            return Ok(config);
-        }
-    }
-
     use std::io::IsTerminal;
     let is_terminal = std::io::stdin().is_terminal();
 
@@ -349,10 +338,65 @@ pub fn load_config() -> Result<AppConfig> {
         .or_else(|_| std::env::var("OPENAI_BASE_URL"))
         .ok()
         .filter(|s| !s.trim().is_empty());
+    let env_thinking = std::env::var("HELIX_THINKING_LEVEL")
+        .or_else(|_| std::env::var("REASONING_EFFORT"))
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    let env_context_window = std::env::var("HELIX_CONTEXT_WINDOW")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok());
+    let env_headroom = std::env::var("HELIX_RESPONSE_HEADROOM")
+        .or_else(|_| std::env::var("HELIX_MAX_TOKENS"))
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok());
+
     let is_non_interactive = !is_terminal
         || std::env::var("NON_INTERACTIVE").is_ok()
         || std::env::var("HELIX_YES").is_ok()
         || std::env::var("CI").is_ok();
+
+    let config_file = get_config_dir()?.join("config.toml");
+    if config_file.exists() {
+        let content = fs::read_to_string(&config_file)?;
+        if let Ok(mut config) = toml::from_str::<AppConfig>(&content) {
+            if let Some(ref m) = env_model {
+                config.active_model = m.clone();
+            }
+            if let Some(ref base) = env_base_url
+                && let Some(p) = config
+                    .providers
+                    .iter_mut()
+                    .find(|p| p.name == config.active_provider)
+            {
+                p.base_url = base.clone();
+            }
+            if let Some(key) = env_openai
+                .as_ref()
+                .or(env_openrouter.as_ref())
+                .or(env_anthropic.as_ref())
+                .or(env_ollama_cloud.as_ref())
+                && let Some(p) = config
+                    .providers
+                    .iter_mut()
+                    .find(|p| p.name == config.active_provider)
+            {
+                p.api_key = Some(key.clone());
+            }
+            if let Some(ref th) = env_thinking {
+                config.thinking_level = Some(th.clone());
+            }
+            if let Some(cw) = env_context_window {
+                config.context_window_override = Some(cw);
+            }
+            if let Some(rh) = env_headroom {
+                config.response_headroom = Some(rh);
+            }
+            if normalize_ollama_cloud_providers(&mut config) {
+                let _ = config.save();
+            }
+            return Ok(config);
+        }
+    }
 
     if is_non_interactive
         || env_openai.is_some()
@@ -425,10 +469,10 @@ pub fn load_config() -> Result<AppConfig> {
             }],
             active_provider: provider_name.to_string(),
             active_model: default_model,
-            context_window_override: None,
-            response_headroom: Some(2048),
+            context_window_override: env_context_window,
+            response_headroom: env_headroom.or(Some(2048)),
             sandbox_mode: SandboxMode::Local,
-            thinking_level: None,
+            thinking_level: env_thinking,
             enable_telemetry: false,
             logfire_token: None,
         };
@@ -1141,5 +1185,35 @@ mod tests {
             deserialized.logfire_token.as_deref(),
             Some("logfire_test_token_12345")
         );
+    }
+
+    #[test]
+    fn test_env_overrides_in_load_config() {
+        unsafe {
+            std::env::set_var("NON_INTERACTIVE", "1");
+            std::env::set_var("HELIX_API_BASE", "https://proxy.example.com/v1");
+            std::env::set_var("OPENAI_API_KEY", "test-key");
+            std::env::set_var("HELIX_MODEL", "test-model-64k");
+            std::env::set_var("HELIX_THINKING_LEVEL", "high");
+            std::env::set_var("HELIX_CONTEXT_WINDOW", "65536");
+            std::env::set_var("HELIX_RESPONSE_HEADROOM", "8192");
+        }
+
+        let loaded = load_config().expect("load_config should succeed with env vars");
+        assert_eq!(loaded.active_model, "test-model-64k");
+        assert_eq!(loaded.thinking_level.as_deref(), Some("high"));
+        assert_eq!(loaded.context_window_override, Some(65536));
+        assert_eq!(loaded.response_headroom, Some(8192));
+
+        // Clean up env vars
+        unsafe {
+            std::env::remove_var("NON_INTERACTIVE");
+            std::env::remove_var("HELIX_API_BASE");
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("HELIX_MODEL");
+            std::env::remove_var("HELIX_THINKING_LEVEL");
+            std::env::remove_var("HELIX_CONTEXT_WINDOW");
+            std::env::remove_var("HELIX_RESPONSE_HEADROOM");
+        }
     }
 }

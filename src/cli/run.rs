@@ -28,6 +28,9 @@ pub struct RunOptions {
     pub no_memory: bool,
     pub no_reflection: bool,
     pub max_iterations: usize,
+    pub thinking: Option<String>,
+    pub context_window: Option<usize>,
+    pub response_headroom: Option<usize>,
     pub output_trajectory: Option<String>,
 }
 
@@ -44,6 +47,18 @@ pub async fn run_single(app_config: &config::AppConfig, opts: RunOptions) -> Res
 
     if let Some(ref p) = opts.provider {
         effective_config.active_provider = p.clone();
+    }
+
+    if let Some(ref t) = opts.thinking {
+        effective_config.thinking_level = Some(t.clone());
+    }
+
+    if let Some(cw) = opts.context_window {
+        effective_config.context_window_override = Some(cw);
+    }
+
+    if let Some(rh) = opts.response_headroom {
+        effective_config.response_headroom = Some(rh);
     }
 
     if opts.api_key.is_some() || opts.api_base.is_some() {
@@ -133,7 +148,23 @@ pub async fn run_single(app_config: &config::AppConfig, opts: RunOptions) -> Res
         core_tools.insert(name.clone(), tool.clone());
     }
 
-    let memory_engine = if !opts.no_memory {
+    let disable_memory = opts.no_memory
+        || std::env::var("HELIX_NO_MEMORY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+    let disable_reflection = opts.no_reflection
+        || std::env::var("HELIX_NO_REFLECTION")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+    let effective_max_iterations = if opts.max_iterations != 30 {
+        opts.max_iterations
+    } else if let Ok(val) = std::env::var("HELIX_MAX_ITERATIONS") {
+        val.parse::<usize>().unwrap_or(opts.max_iterations)
+    } else {
+        opts.max_iterations
+    };
+
+    let memory_engine = if !disable_memory {
         let memory_dir = data_dir.join("memory");
         memory::HelixMemoryEngine::new(&memory_dir).ok()
     } else {
@@ -159,8 +190,8 @@ pub async fn run_single(app_config: &config::AppConfig, opts: RunOptions) -> Res
 
     let mut engine = engine::Engine::new(model, context, tools, session, core_tools, dynamic_state)
         .with_headless(true)
-        .with_reflection(!opts.no_reflection)
-        .with_max_iterations(opts.max_iterations);
+        .with_reflection(!disable_reflection)
+        .with_max_iterations(effective_max_iterations);
 
     if let Some(mem) = memory_engine {
         let sona_config = ruvector_sona::SonaConfig {

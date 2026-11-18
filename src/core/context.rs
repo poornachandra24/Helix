@@ -87,6 +87,10 @@ impl TokenEstimator {
             tokens += Self::estimate_text(tool_call_id) + 4;
         }
 
+        if let Some(reasoning) = msg.get("reasoning_content").and_then(|r| r.as_str()) {
+            tokens += Self::estimate_text(reasoning);
+        }
+
         tokens
     }
 

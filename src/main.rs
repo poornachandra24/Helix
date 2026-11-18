@@ -72,9 +72,21 @@ enum Command {
         #[arg(long)]
         no_reflection: bool,
 
-        /// Maximum agent tool loop iterations (default: 30)
+        /// Maximum agent tool loop iterations (default: 30, 0 for unlimited)
         #[arg(long, default_value_t = 30)]
         max_iterations: usize,
+
+        /// Reasoning effort / thinking level (off, low, medium, high, or budget in tokens)
+        #[arg(long = "thinking", alias = "reasoning-effort")]
+        thinking: Option<String>,
+
+        /// Context window size override in tokens
+        #[arg(long)]
+        context_window: Option<usize>,
+
+        /// Response headroom / max output token reservation
+        #[arg(long = "response-headroom", alias = "max-tokens")]
+        response_headroom: Option<usize>,
 
         /// Path to export execution trajectory JSON (for Harbor / evaluation leaderboards)
         #[arg(long)]
@@ -197,6 +209,9 @@ async fn main() -> Result<()> {
             no_memory,
             no_reflection,
             max_iterations,
+            thinking,
+            context_window,
+            response_headroom,
             output_trajectory,
             trace: _,
         }) => {
@@ -210,6 +225,9 @@ async fn main() -> Result<()> {
                 no_memory: *no_memory,
                 no_reflection: *no_reflection,
                 max_iterations: *max_iterations,
+                thinking: thinking.clone(),
+                context_window: *context_window,
+                response_headroom: *response_headroom,
                 output_trajectory: output_trajectory.clone(),
             };
             cli::run::run_single(&app_config, opts).await
