@@ -279,7 +279,9 @@ pub async fn build_context(
         config.thinking_level.as_deref(),
         &config.active_model,
     );
-    let effective_headroom = config.response_headroom.unwrap_or(dynamic_headroom);
+    let raw_headroom = config.response_headroom.unwrap_or(dynamic_headroom);
+    let max_safe_headroom = (model_window * 3 / 10).max(512);
+    let effective_headroom = raw_headroom.min(max_safe_headroom);
 
     let budget =
         context::ContextBudget::new(model_window, system_prompt, tools, effective_headroom);
