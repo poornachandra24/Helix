@@ -4,6 +4,13 @@ All notable changes to the Helix project will be documented in this file. The fo
 
 ---
 
+## [0.5.1](https://github.com/poornachandra24/Helix/compare/v0.5.0...v0.5.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **context:** clamp effective response headroom to at most 30% of context window ([b9045bc](https://github.com/poornachandra24/Helix/commit/b9045bc683905e87ad3ae4722f4c353b91564677))
+
 ## [0.5.0](https://github.com/poornachandra24/Helix/compare/v0.4.0...v0.5.0) (2026-11-18)
 
 
