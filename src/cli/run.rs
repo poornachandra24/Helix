@@ -31,6 +31,7 @@ pub struct RunOptions {
     pub thinking: Option<String>,
     pub context_window: Option<usize>,
     pub response_headroom: Option<usize>,
+    pub images: Vec<String>,
     pub output_trajectory: Option<String>,
 }
 
@@ -237,7 +238,7 @@ pub async fn run_single(app_config: &config::AppConfig, opts: RunOptions) -> Res
     sandbox.set_mode(actual_mode);
 
     let run_res = tokio::select! {
-        res = engine.run_turn(&system_prompt, &opts.goal, Some(tx)) => {
+        res = engine.run_turn_with_images(&system_prompt, &opts.goal, &opts.images, Some(tx)) => {
             printer.await.ok();
             match res {
                 Ok(out) => {

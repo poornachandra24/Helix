@@ -78,7 +78,8 @@ impl OpenAiCompatibleAdapter {
     pub fn new(config: AppConfig) -> Self {
         let level = config.thinking_level.clone();
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_else(|_| Client::new());
         Self {
@@ -166,34 +167,23 @@ impl OpenAiCompatibleAdapter {
 
                 let active_level = self.thinking_level.read().ok().and_then(|r| r.clone());
                 if let Some(level) = &active_level {
-                    let model_lower = self.config.active_model.to_lowercase();
-                    let provider_lower = self.config.active_provider.to_lowercase();
-                    let is_gemini =
-                        model_lower.contains("gemini") || provider_lower.contains("gemini");
-                    if !is_gemini {
-                        let level_lower = level.to_lowercase();
-                        if level_lower == "off" || level_lower == "disabled" {
-                            payload["reasoning_effort"] = json!("low");
-                            payload["thinking_config"] = json!({ "thinking_budget": 0 });
-                        } else if level_lower == "low" {
-                            payload["reasoning_effort"] = json!("low");
-                            payload["thinking_config"] = json!({ "thinking_budget": 1024 });
-                        } else if level_lower == "medium" {
-                            payload["reasoning_effort"] = json!("medium");
-                            payload["thinking_config"] = json!({ "thinking_budget": 4096 });
-                        } else if level_lower == "high" {
-                            payload["reasoning_effort"] = json!("high");
-                            payload["thinking_config"] = json!({ "thinking_budget": 16384 });
-                        } else if let Ok(budget) = level.parse::<u64>() {
-                            payload["thinking_config"] = json!({ "thinking_budget": budget });
-                            let effort = if budget < 2048 {
-                                "low"
-                            } else if budget < 8192 {
-                                "medium"
-                            } else {
-                                "high"
-                            };
-                            payload["reasoning_effort"] = json!(effort);
+                    let level_lower = level.to_lowercase();
+                    if level_lower == "off" || level_lower == "disabled" {
+                        // Omit reasoning_effort when explicitly disabled
+                    } else if matches!(level_lower.as_str(), "low" | "medium" | "high") {
+                        payload["reasoning_effort"] = json!(level_lower);
+                    } else if let Ok(budget) = level.parse::<u64>() {
+                        let effort = if budget == 0 {
+                            None
+                        } else if budget < 2048 {
+                            Some("low")
+                        } else if budget < 8192 {
+                            Some("medium")
+                        } else {
+                            Some("high")
+                        };
+                        if let Some(e) = effort {
+                            payload["reasoning_effort"] = json!(e);
                         }
                     }
                 }
@@ -216,6 +206,31 @@ impl OpenAiCompatibleAdapter {
                             {
                                 func["arguments"] = obj;
                             }
+                        }
+                    }
+                    if let Some(parts) = modified.get("content").and_then(|v| v.as_array()).cloned()
+                    {
+                        let mut text_parts = Vec::new();
+                        let mut images = Vec::new();
+                        for part in parts {
+                            if part.get("type").and_then(|t| t.as_str()) == Some("image_url")
+                                && let Some(url) = part
+                                    .get("image_url")
+                                    .and_then(|iu| iu.get("url"))
+                                    .and_then(|u| u.as_str())
+                            {
+                                let b64 = url
+                                    .split_once(";base64,")
+                                    .map(|(_, data)| data)
+                                    .unwrap_or(url);
+                                images.push(b64.to_string());
+                            } else if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                text_parts.push(text.to_string());
+                            }
+                        }
+                        modified["content"] = json!(text_parts.join("\n"));
+                        if !images.is_empty() {
+                            modified["images"] = json!(images);
                         }
                     }
                     msgs.push(modified);
@@ -579,37 +594,95 @@ impl ModelAdapter for OpenAiCompatibleAdapter {
         let streaming = stream_tx.is_some();
         let payload = self.build_payload(system_prompt, messages, tools, format, streaming);
 
-        let mut req = self.client.post(&endpoint).json(&payload);
-        if let Some(key) = api_key {
-            req = req.bearer_auth(key);
-        }
-
         tracing::debug!(endpoint = %endpoint, "Calling model");
 
         if let Some(ref tx) = stream_tx {
             let _ = tx.send("\x02".to_string());
         }
 
-        let resp_res = req.send().await;
+        const MAX_HTTP_RETRIES: u32 = 3;
+        let mut resp_opt: Option<reqwest::Response> = None;
+        let mut last_err: Option<anyhow::Error> = None;
+
+        for attempt in 0..=MAX_HTTP_RETRIES {
+            let mut req = self.client.post(&endpoint).json(&payload);
+            if let Some(key) = api_key {
+                req = req.bearer_auth(key);
+            }
+
+            match req.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    resp_opt = Some(resp);
+                    break;
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let retry_after_secs = resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+                    let body = resp.text().await.unwrap_or_default();
+
+                    if status == reqwest::StatusCode::UNAUTHORIZED
+                        && provider.name == "Ollama Cloud"
+                    {
+                        if let Some(ref tx) = stream_tx {
+                            let _ = tx.send("\x03".to_string());
+                        }
+                        anyhow::bail!(
+                            "Ollama Cloud authentication failed (401 Unauthorized).\n\n\
+                             Please verify that:\n\
+                             1. You have a valid Ollama account on https://ollama.com\n\
+                             2. You have configured a valid API key for Ollama Cloud in Helix (using `/config` or via config.toml)."
+                        );
+                    }
+
+                    let is_transient = matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504);
+                    if is_transient && attempt < MAX_HTTP_RETRIES {
+                        let wait_secs = retry_after_secs.unwrap_or(1u64 << attempt).min(30);
+                        tracing::warn!(
+                            %status,
+                            attempt = attempt + 1,
+                            wait_secs,
+                            "Transient HTTP error; retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+                        continue;
+                    }
+                    last_err = Some(anyhow::anyhow!(
+                        "API returned error status {}: {}",
+                        status,
+                        body
+                    ));
+                    break;
+                }
+                Err(e) => {
+                    if attempt < MAX_HTTP_RETRIES {
+                        let wait_secs = 1u64 << attempt;
+                        tracing::warn!(
+                            error = %e,
+                            attempt = attempt + 1,
+                            wait_secs,
+                            "Transient request error; retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+                        continue;
+                    }
+                    last_err = Some(e.into());
+                    break;
+                }
+            }
+        }
 
         if let Some(ref tx) = stream_tx {
             let _ = tx.send("\x03".to_string());
         }
 
-        let resp_val = resp_res?;
-        if !resp_val.status().is_success() {
-            let status = resp_val.status();
-            let body = resp_val.text().await.unwrap_or_default();
-            if status == reqwest::StatusCode::UNAUTHORIZED && provider.name == "Ollama Cloud" {
-                anyhow::bail!(
-                    "Ollama Cloud authentication failed (401 Unauthorized).\n\n\
-                     Please verify that:\n\
-                     1. You have a valid Ollama account on https://ollama.com\n\
-                     2. You have configured a valid API key for Ollama Cloud in Helix (using `/config` or via config.toml)."
-                );
-            }
-            anyhow::bail!("API returned error status {}: {}", status, body);
-        }
+        let resp_val = match resp_opt {
+            Some(r) => r,
+            None => return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("API call failed"))),
+        };
 
         if streaming {
             let mut stream = resp_val.bytes_stream();
@@ -912,5 +985,33 @@ I will inspect the project file now.
 
         assert_eq!(full_reasoning, "Step 1: Check files. ");
         assert!(full_text.is_empty());
+    }
+
+    #[test]
+    fn test_build_payload_multimodal_ollama_and_openai() {
+        let adapter = make_test_adapter();
+        let msgs = vec![json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "Inspect this screenshot" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } }
+            ]
+        })];
+
+        let openai_payload =
+            adapter.build_payload("sys", &msgs, vec![], &ApiFormat::OpenAiCompatible, false);
+        assert!(openai_payload["messages"][1]["content"].is_array());
+        assert_eq!(
+            openai_payload["messages"][1]["content"][1]["type"],
+            "image_url"
+        );
+
+        let ollama_payload =
+            adapter.build_payload("sys", &msgs, vec![], &ApiFormat::OllamaNative, false);
+        assert_eq!(
+            ollama_payload["messages"][1]["content"],
+            "Inspect this screenshot"
+        );
+        assert_eq!(ollama_payload["messages"][1]["images"], json!(["AAAA"]));
     }
 }

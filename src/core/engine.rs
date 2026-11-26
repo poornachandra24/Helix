@@ -78,6 +78,52 @@ pub const GREETINGS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Parse a structured image attachment marker emitted by `read_file` / `read_image`.
+/// Returns `(path, mime_type, byte_len, data_url)` if valid.
+pub fn parse_image_attachment(result: &str) -> Option<(String, String, usize, String)> {
+    let json_str = result.strip_prefix(crate::tools::builtins::IMAGE_ATTACHMENT_PREFIX)?;
+    let val: Value = serde_json::from_str(json_str).ok()?;
+    let path = val.get("path")?.as_str()?.to_string();
+    let mime = val.get("mime_type")?.as_str()?.to_string();
+    let bytes = val.get("bytes")?.as_u64()? as usize;
+    let data_url = val.get("data_url")?.as_str()?.to_string();
+    Some((path, mime, bytes, data_url))
+}
+
+/// Build an OpenAI-compatible multimodal `content` array from a text prompt and image paths/URLs.
+pub fn build_user_content_with_images(input: &str, images: &[String]) -> Result<Value> {
+    let mut parts = vec![json!({
+        "type": "text",
+        "text": input
+    })];
+    for img in images {
+        let data_url = if img.starts_with("data:image/")
+            || img.starts_with("http://")
+            || img.starts_with("https://")
+        {
+            img.clone()
+        } else {
+            let mime = crate::tools::builtins::detect_image_mime(img).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unsupported image format '{}'. Supported: .png, .jpg, .jpeg, .gif, .webp",
+                    img
+                )
+            })?;
+            let bytes = std::fs::read(img)
+                .map_err(|e| anyhow::anyhow!("Cannot read image '{}': {}", img, e))?;
+            if bytes.is_empty() {
+                anyhow::bail!("Image file '{}' is empty", img);
+            }
+            crate::tools::builtins::encode_image_data_url(&bytes, mime)
+        };
+        parts.push(json!({
+            "type": "image_url",
+            "image_url": { "url": data_url }
+        }));
+    }
+    Ok(Value::Array(parts))
+}
+
 /// Main autonomous agent execution engine coordinating planning loops, tool dispatch,
 /// local healer retries, metrics recording, and semantic query projection adaptation.
 pub struct Engine {
@@ -467,8 +513,18 @@ impl Engine {
     ///
     /// `stream_tx`: if `Some`, text tokens for the final answer are sent through
     /// this channel as they arrive so the REPL can print them progressively.
+    pub async fn run_turn(
+        &mut self,
+        system_prompt: &str,
+        input: &str,
+        stream_tx: Option<UnboundedSender<String>>,
+    ) -> Result<String> {
+        self.run_turn_with_images(system_prompt, input, &[], stream_tx)
+            .await
+    }
+
     #[tracing::instrument(
-        skip(self, system_prompt, stream_tx),
+        skip(self, system_prompt, images, stream_tx),
         fields(
             session_id = %self.session.id,
             gen_ai.conversation.id = %self.session.id,
@@ -488,10 +544,11 @@ impl Engine {
             dataset.is_successful = tracing::field::Empty,
         )
     )]
-    pub async fn run_turn(
+    pub async fn run_turn_with_images(
         &mut self,
         system_prompt: &str,
         input: &str,
+        images: &[String],
         stream_tx: Option<UnboundedSender<String>>,
     ) -> Result<String> {
         let turn_index = self.metrics.as_ref().map(|m| m.turn_count()).unwrap_or(0);
@@ -521,8 +578,12 @@ impl Engine {
         let cleaned_trimmed = cleaned.strip_suffix('?').unwrap_or(&cleaned).trim();
         let mut cache_hit: Option<String> = None;
 
-        // Never intercept greetings in headless/benchmark mode, or on longer prompts
-        if !self.is_headless && input.split_whitespace().count() <= 3 && input.len() <= 30 {
+        // Never intercept greetings in headless/benchmark mode, with images, or on longer prompts
+        if !self.is_headless
+            && images.is_empty()
+            && input.split_whitespace().count() <= 3
+            && input.len() <= 30
+        {
             for (q, r) in GREETINGS {
                 if cleaned == *q || cleaned_trimmed == *q {
                     cache_hit = Some((*r).to_string());
@@ -589,10 +650,16 @@ impl Engine {
             return Ok(response);
         }
 
+        let user_content = if images.is_empty() {
+            json!(input)
+        } else {
+            build_user_content_with_images(input, images)?
+        };
         self.global_messages
-            .push(json!({"role": "user", "content": input}));
-        self.session
-            .append(json!({"event": "user_input", "content": input}))?;
+            .push(json!({"role": "user", "content": user_content}));
+        self.session.append(
+            json!({"event": "user_input", "content": input, "images_count": images.len()}),
+        )?;
 
         // Ensure no stale scratchpad is left over at the start of the turn.
         // It will be dynamically re-initialized in run_turn_inner if the agent calls any tools.
@@ -805,7 +872,8 @@ impl Engine {
         match &result {
             Ok(text) => {
                 let preview = if text.len() > 4096 {
-                    format!("{}... (truncated)", &text[..4096])
+                    let end = text.floor_char_boundary(4096);
+                    format!("{}... (truncated)", &text[..end])
                 } else {
                     text.clone()
                 };
@@ -870,25 +938,6 @@ impl Engine {
 
             if let Some(ref tx) = stream_tx {
                 let _ = tx.send(format!("\x1b[SWorking (step {})...", step));
-            }
-
-            let mut tool_counts = std::collections::HashMap::new();
-            for name in executed_tools.iter() {
-                *tool_counts.entry(name.clone()).or_insert(0) += 1;
-            }
-            for (name, count) in tool_counts {
-                if count >= 5 {
-                    let warning = format!(
-                        "[System Note]: You have already called the '{}' tool {} times in this turn. \
-                        To prevent infinite loops, further calls to '{}' are restricted. \
-                        Please summarize the results you have obtained so far and provide your final answer or state what you could not find.",
-                        name, count, name
-                    );
-                    self.global_messages.push(json!({
-                        "role": "user",
-                        "content": warning
-                    }));
-                }
             }
 
             let (compacted, was_compacted) =
@@ -1003,7 +1052,20 @@ impl Engine {
                     *tool_calls_out += dispatched;
 
                     let mut step_failures = Vec::new();
-                    for (call, result) in results {
+                    let mut pending_images: Vec<(String, String)> = Vec::new();
+                    for (call, raw_result) in results {
+                        let result = if let Some((path, mime, bytes, data_url)) =
+                            parse_image_attachment(&raw_result)
+                        {
+                            pending_images.push((path.clone(), data_url));
+                            format!(
+                                "Image '{}' loaded ({}, {} bytes) and attached in the following user message for visual inspection.",
+                                path, mime, bytes
+                            )
+                        } else {
+                            raw_result
+                        };
+
                         tracing::debug!(tool = %call.name, result = %result, "Tool result");
                         self.session.append(json!({
                             "event": "tool_result",
@@ -1028,9 +1090,12 @@ impl Engine {
                         // Truncate massively long tool outputs to prevent context window overflow / 500 errors
                         let max_chars = 16_000;
                         let content = if result.len() > max_chars {
-                            let head = &result[..max_chars / 2];
-                            let tail = &result[result.len() - (max_chars / 2)..];
-                            let omitted = result.len() - max_chars;
+                            let head_end = result.floor_char_boundary(max_chars / 2);
+                            let tail_start =
+                                result.ceil_char_boundary(result.len() - (max_chars / 2));
+                            let head = &result[..head_end];
+                            let tail = &result[tail_start..];
+                            let omitted = result.len() - (head.len() + tail.len());
                             format!(
                                 "{}\n\n... [{} bytes omitted by context truncator] ...\n\n{}",
                                 head, omitted, tail
@@ -1043,6 +1108,27 @@ impl Engine {
                             "role":         "tool",
                             "tool_call_id": call.id,
                             "content":      content,
+                        }));
+                    }
+
+                    // Append any tool-loaded images as a multimodal user message AFTER all tool responses
+                    // so OpenAI Chat Completions tool_call_id ordering invariants are preserved.
+                    if !pending_images.is_empty() {
+                        let names: Vec<&str> =
+                            pending_images.iter().map(|(p, _)| p.as_str()).collect();
+                        let mut parts = vec![json!({
+                            "type": "text",
+                            "text": format!("[Attached image(s) from tool output: {}]", names.join(", "))
+                        })];
+                        for (_, data_url) in pending_images {
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": { "url": data_url }
+                            }));
+                        }
+                        self.global_messages.push(json!({
+                            "role": "user",
+                            "content": parts
                         }));
                     }
                     // Self-Correction & Planning Reflection logic
@@ -1347,5 +1433,25 @@ mod tests {
         assert!(engine.is_headless);
         assert!(!engine.enable_reflection);
         assert_eq!(engine.max_iterations, 10);
+    }
+
+    #[test]
+    fn test_parse_image_attachment() {
+        let marker = format!(
+            "{}{}",
+            crate::tools::builtins::IMAGE_ATTACHMENT_PREFIX,
+            json!({
+                "path": "ui.png",
+                "mime_type": "image/png",
+                "bytes": 42,
+                "data_url": "data:image/png;base64,AAAA"
+            })
+        );
+        let parsed = parse_image_attachment(&marker).expect("Should parse image marker");
+        assert_eq!(parsed.0, "ui.png");
+        assert_eq!(parsed.1, "image/png");
+        assert_eq!(parsed.2, 42);
+        assert_eq!(parsed.3, "data:image/png;base64,AAAA");
+        assert!(parse_image_attachment("plain text output").is_none());
     }
 }

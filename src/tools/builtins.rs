@@ -4,16 +4,72 @@ use crate::tools::Tool;
 use crate::tools::sandbox::{SandboxBackend, SandboxMode, SharedSandbox};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use base64::Engine as _;
 use console::style;
 use serde_json::{Value, json};
 
 const OUTPUT_MAX_BYTES: usize = 8_000;
+const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+pub const IMAGE_ATTACHMENT_PREFIX: &str = "__HELIX_IMAGE_ATTACHMENT__:";
+
+/// Detect image MIME type from file extension (case-insensitive).
+pub fn detect_image_mime(path: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Encode raw image bytes into a base64 `data:<mime>;base64,...` URL.
+pub fn encode_image_data_url(bytes: &[u8], mime: &str) -> String {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    format!("data:{};base64,{}", mime, b64)
+}
+
+/// Read an image file from the sandbox and return a structured attachment marker
+/// for `Engine` to inject as a multimodal user message.
+pub async fn load_image_attachment(sandbox: &SharedSandbox, path: &str) -> Result<String> {
+    let mime = detect_image_mime(path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unsupported image format for '{}'. Supported formats: .png, .jpg, .jpeg, .gif, .webp",
+            path
+        )
+    })?;
+    let bytes = sandbox.read_bytes(path).await?;
+    if bytes.is_empty() {
+        anyhow::bail!("Image file '{}' is empty", path);
+    }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        anyhow::bail!(
+            "Image file '{}' is too large ({} bytes, max {} bytes)",
+            path,
+            bytes.len(),
+            MAX_IMAGE_BYTES
+        );
+    }
+    let data_url = encode_image_data_url(&bytes, mime);
+    let payload = json!({
+        "path": path,
+        "mime_type": mime,
+        "bytes": bytes.len(),
+        "data_url": data_url,
+    });
+    Ok(format!("{}{}", IMAGE_ATTACHMENT_PREFIX, payload))
+}
 
 fn truncate(s: String, label: &str) -> String {
     if s.len() > OUTPUT_MAX_BYTES {
+        let end = s.floor_char_boundary(OUTPUT_MAX_BYTES);
         format!(
             "{}...\n[{} TRUNCATED at {} bytes]",
-            &s[..OUTPUT_MAX_BYTES],
+            &s[..end],
             label,
             OUTPUT_MAX_BYTES
         )
@@ -108,7 +164,7 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read the contents of a file. Optionally specify start/end line numbers (1-indexed, inclusive). Returns raw text."
+        "Read the contents of a file (or inspect an image file: .png, .jpg, .jpeg, .gif, .webp). Optionally specify start/end line numbers (1-indexed, inclusive) for text files."
     }
     fn parameters_schema(&self) -> Value {
         json!({
@@ -124,6 +180,9 @@ impl Tool for ReadFileTool {
 
     async fn call(&self, args: Value) -> Result<String> {
         let path = args["path"].as_str().context("'path' is required")?;
+        if detect_image_mime(path).is_some() {
+            return load_image_attachment(&self.sandbox, path).await;
+        }
         let content = self.sandbox.read_file(path).await?;
 
         let start = args["start_line"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
@@ -138,6 +197,44 @@ impl Tool for ReadFileTool {
         let slice = lines[start..end].join("\n");
 
         Ok(truncate(slice, "FILE"))
+    }
+}
+
+// ──────────────────────────────────────────────
+// ReadImageTool
+// ──────────────────────────────────────────────
+
+pub struct ReadImageTool {
+    sandbox: SharedSandbox,
+}
+
+impl ReadImageTool {
+    pub fn new(sandbox: SharedSandbox) -> Self {
+        Self { sandbox }
+    }
+}
+
+#[async_trait]
+impl Tool for ReadImageTool {
+    fn name(&self) -> &str {
+        "read_image"
+    }
+    fn description(&self) -> &str {
+        "Read an image file (.png, .jpg, .jpeg, .gif, .webp) from the workspace for visual inspection."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Path to the image file" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn call(&self, args: Value) -> Result<String> {
+        let path = args["path"].as_str().context("'path' is required")?;
+        load_image_attachment(&self.sandbox, path).await
     }
 }
 
@@ -1012,6 +1109,48 @@ mod tests {
         assert!(res.contains("Successfully replaced"));
         let modified = tokio::fs::read_to_string(&file_path).await.unwrap();
         assert_eq!(modified, "fn hello() {\n    println!(\"new\");\n}\n");
+    }
+
+    #[tokio::test]
+    async fn test_read_file_and_read_image_tools() {
+        assert_eq!(detect_image_mime("diagram.PNG"), Some("image/png"));
+        assert_eq!(detect_image_mime("photo.jpg"), Some("image/jpeg"));
+        assert_eq!(detect_image_mime("anim.webp"), Some("image/webp"));
+        assert_eq!(detect_image_mime("notes.txt"), None);
+
+        let current_dir = std::env::current_dir().unwrap();
+        let dir = tempfile::Builder::new().tempdir_in(&current_dir).unwrap();
+        let img_path = dir.path().join("pixel.png");
+        // Minimal 1x1 PNG header bytes
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        ];
+        tokio::fs::write(&img_path, png_bytes).await.unwrap();
+
+        let sandbox = SharedSandbox::new(SandboxMode::Local);
+        let read_file = ReadFileTool::new(sandbox.clone());
+        let read_image = ReadImageTool::new(sandbox);
+
+        let rf_out = read_file
+            .call(json!({ "path": img_path.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(rf_out.starts_with(IMAGE_ATTACHMENT_PREFIX));
+        assert!(rf_out.contains("data:image/png;base64,"));
+
+        let ri_out = read_image
+            .call(json!({ "path": img_path.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert_eq!(rf_out, ri_out);
+    }
+
+    #[test]
+    fn test_truncate_utf8_boundary() {
+        // '─' is 3 bytes in UTF-8; 8000 is not divisible by 3, so byte 8000 is mid-character.
+        let s = "─".repeat(3000);
+        let out = truncate(s, "STDOUT");
+        assert!(out.contains("STDOUT TRUNCATED"));
     }
 
     #[tokio::test]

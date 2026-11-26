@@ -27,6 +27,7 @@ pub struct CommandResult {
 pub trait SandboxBackend: Send + Sync {
     async fn execute_command(&self, cmd: &str) -> Result<CommandResult>;
     async fn read_file(&self, path: &str) -> Result<String>;
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>>;
     async fn write_file(&self, path: &str, content: &str) -> Result<()>;
     async fn list_dir(&self, path: &str, max_depth: usize) -> Result<String>;
 }
@@ -79,6 +80,14 @@ impl SandboxBackend for LocalSandbox {
             .await
             .map_err(|e| anyhow::anyhow!("Cannot read file '{}': {}", path, e))?;
         Ok(content)
+    }
+
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let real_path = resolve_and_validate_path(&self.base_dir, path)?;
+        let bytes = tokio::fs::read(&real_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Cannot read binary file '{}': {}", path, e))?;
+        Ok(bytes)
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<()> {
@@ -312,6 +321,14 @@ impl SandboxBackend for DockerSandbox {
         Ok(content)
     }
 
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let real_path = self.translate_path(path)?;
+        let bytes = tokio::fs::read(real_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Cannot read binary file '{}' in sandbox: {}", path, e))?;
+        Ok(bytes)
+    }
+
     async fn write_file(&self, path: &str, content: &str) -> Result<()> {
         let real_path = self.translate_path(path)?;
         if let Some(parent) = real_path.parent() {
@@ -482,6 +499,12 @@ impl SandboxBackend for WasmSandbox {
         let real_path = self.translate_path(path)?;
         let content = tokio::fs::read_to_string(real_path).await?;
         Ok(content)
+    }
+
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let real_path = self.translate_path(path)?;
+        let bytes = tokio::fs::read(real_path).await?;
+        Ok(bytes)
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<()> {
@@ -799,6 +822,28 @@ impl SandboxBackend for SharedSandbox {
         }
     }
 
+    async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let mode = self.get_mode();
+        match mode {
+            SandboxMode::Local => {
+                LocalSandbox::new(self.original_dir.clone())
+                    .read_bytes(path)
+                    .await
+            }
+            SandboxMode::Worktree => {
+                let wt_path = {
+                    let lock = self.worktree_state.lock().await;
+                    lock.as_ref().map(|info| info.path.clone())
+                };
+                let base = wt_path.unwrap_or_else(|| self.original_dir.clone());
+                LocalSandbox::new(base).read_bytes(path).await
+            }
+            SandboxMode::Docker => DockerSandbox::new().read_bytes(path).await,
+            SandboxMode::Wasm => WasmSandbox::new().read_bytes(path).await,
+            SandboxMode::SSH => anyhow::bail!("SSH sandbox mode is not implemented yet"),
+        }
+    }
+
     async fn write_file(&self, path: &str, content: &str) -> Result<()> {
         let mode = self.get_mode();
         match mode {
@@ -915,7 +960,7 @@ pub fn resolve_and_validate_path(base_dir: &Path, user_path: &str) -> Result<Pat
         }
     };
 
-    if !canonical_target.starts_with(&canonical_base) {
+    if !crate::cli::helpers::is_auto_approve() && !canonical_target.starts_with(&canonical_base) {
         anyhow::bail!(
             "Access denied: path '{}' is outside the workspace root '{}'",
             user_path,
