@@ -543,7 +543,7 @@ pub async fn resolve_and_report(config: &AppConfig, client: &Client) -> usize {
 pub fn build_lookup_client() -> Client {
     Client::builder()
         .user_agent("helix-cli/0.1 (model-info-lookup)")
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(3))
         .build()
         .expect("Failed to build lookup client")
 }

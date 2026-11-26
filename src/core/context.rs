@@ -53,7 +53,10 @@ impl TokenEstimator {
                 tokens += Self::estimate_text(s);
             } else if let Some(arr) = content.as_array() {
                 for item in arr {
-                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                    if item.get("type").and_then(|t| t.as_str()) == Some("image_url") {
+                        // Vision models charge ~85-1600 tokens per image regardless of base64 length
+                        tokens += 1024;
+                    } else if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                         tokens += Self::estimate_text(text);
                     } else if let Some(s) = item.as_str() {
                         tokens += Self::estimate_text(s);
@@ -651,5 +654,24 @@ mod tests {
         );
         // Final message is preserved
         assert_eq!(compacted.last().unwrap()["content"], "step 5");
+    }
+
+    #[test]
+    fn test_token_estimator_image_url() {
+        let huge_b64 = "A".repeat(100_000);
+        let msg = json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "describe" },
+                { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{}", huge_b64) } }
+            ]
+        });
+        let est = TokenEstimator::estimate_message(&msg);
+        assert!(
+            est < 2000,
+            "Image token estimate should not count raw base64 bytes, got {}",
+            est
+        );
+        assert!(est >= 1024);
     }
 }

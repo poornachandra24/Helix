@@ -27,6 +27,7 @@ struct Args {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Interactive chat REPL (default)
     Chat {
@@ -87,6 +88,10 @@ enum Command {
         /// Response headroom / max output token reservation
         #[arg(long = "response-headroom", alias = "max-tokens")]
         response_headroom: Option<usize>,
+
+        /// Image file path or URL to attach to the initial prompt (repeatable)
+        #[arg(long = "image", value_name = "PATH")]
+        images: Vec<String>,
 
         /// Path to export execution trajectory JSON (for Harbor / evaluation leaderboards)
         #[arg(long)]
@@ -212,6 +217,7 @@ async fn main() -> Result<()> {
             thinking,
             context_window,
             response_headroom,
+            images,
             output_trajectory,
             trace: _,
         }) => {
@@ -228,6 +234,7 @@ async fn main() -> Result<()> {
                 thinking: thinking.clone(),
                 context_window: *context_window,
                 response_headroom: *response_headroom,
+                images: images.clone(),
                 output_trajectory: output_trajectory.clone(),
             };
             cli::run::run_single(&app_config, opts).await

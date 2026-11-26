@@ -228,6 +228,7 @@ pub fn build_tool_registry(
     let mut registry = tools::ToolRegistry::new();
     registry.register(builtins::BashTool::new(sandbox.clone()));
     registry.register(builtins::ReadFileTool::new(sandbox.clone()));
+    registry.register(builtins::ReadImageTool::new(sandbox.clone()));
     registry.register(builtins::WriteFileTool::new(sandbox.clone()));
     registry.register(builtins::StrReplaceTool::new(sandbox.clone()));
     registry.register(builtins::ListDirTool::new(sandbox.clone()));
