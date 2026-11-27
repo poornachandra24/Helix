@@ -4,6 +4,13 @@ All notable changes to the Helix project will be documented in this file. The fo
 
 ---
 
+## [0.6.0](https://github.com/poornachandra24/Helix/compare/v0.5.0...v0.6.0) (2026-11-27)
+
+
+### Features
+
+* add multimodal image support and harden agent loop for benchmark evaluation ([#36](https://github.com/poornachandra24/Helix/issues/36)) ([eed85b8](https://github.com/poornachandra24/Helix/commit/eed85b81943e63f3a13a0de863369f6cd8501f2c))
+
 ## [0.5.0](https://github.com/poornachandra24/Helix/compare/v0.4.0...v0.5.0) (2026-11-18)
 
 
