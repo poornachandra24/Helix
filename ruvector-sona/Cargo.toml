@@ -104,10 +104,10 @@ version = "2.16"
 optional = true
 
 [dependencies.parking_lot]
-version = "0.12"
+version = "0.13"
 
 [dependencies.rand]
-version = "0.8"
+version = "0.10"
 
 [dependencies.serde]
 version = "1.0"
@@ -142,7 +142,7 @@ version = "0.5"
 version = "1.19"
 
 [dev-dependencies.rand]
-version = "0.8"
+version = "0.10"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
 version = "0.2"
