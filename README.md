@@ -81,7 +81,7 @@ When tools are called mid-turn:
   ✓ 'bash' completed (219 bytes)
 ```
 
-The `· loop N/20` label shows which agent tool-use iteration is active. The max is 20 iterations per turn to prevent runaway loops.
+The `· loop N/20` label shows which agent tool-use iteration is active in the interactive REPL (default max: 20; headless `helix run` defaults to 30 and supports `--max-iterations 0` for unlimited steps).
 
 For full color token definitions and box math, see [docs/ux_design.md](docs/ux_design.md).
 
@@ -153,6 +153,39 @@ cargo run -- -vv
 | `/telemetry [on\|off\|status]` | Toggle or configure Logfire OpenTelemetry tracing and token management |
 | `/optimize` | Force SONA neural adaptation & parameter consolidation |
 | `/exit` \| `/quit` | Exit the REPL session |
+
+---
+
+## Headless & Multimodal Execution (`helix run`)
+
+Run single tasks non-interactively in CI, scripts, or container benchmarks (e.g., Harbor / Terminal-Bench / DeepSWE):
+
+```bash
+helix run "Fix the failing tests and verify" \
+  --yes \
+  --api-base "$OPENAI_BASE_URL" \
+  --api-key "$OPENAI_API_KEY" \
+  --model "$MODEL" \
+  --max-iterations 0 \
+  --no-memory \
+  --no-reflection
+```
+
+| Flag | Env Var Fallback | Description |
+|------|------------------|-------------|
+| `-y`, `--yes` | `HELIX_YES`, `NON_INTERACTIVE` | Auto-approve all tools and allow container-wide file access |
+| `--api-base <URL>` | `HELIX_API_BASE`, `OPENAI_BASE_URL` | Custom OpenAI-compatible Chat Completions endpoint |
+| `--api-key <KEY>` | `OPENAI_API_KEY`, `OPENROUTER_API_KEY` | API key for the model endpoint |
+| `-m`, `--model <ID>` | `HELIX_MODEL` | Model name to pass to the endpoint |
+| `--max-iterations <N>` | `HELIX_MAX_ITERATIONS` | Max tool-loop steps (default: `30`; `0` for unlimited) |
+| `--thinking <LEVEL>` | `REASONING_EFFORT`, `HELIX_THINKING_LEVEL` | Reasoning effort (`off`, `low`, `medium`, `high`, or token budget) |
+| `--context-window <N>` | `HELIX_CONTEXT_WINDOW` | Override auto-detected model context window (tokens) |
+| `--response-headroom <N>` | `HELIX_RESPONSE_HEADROOM` | Tokens reserved from context for reply (clamped to ≤30% of window) |
+| `--image <PATH>` | — | Attach an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) or URL (repeatable) |
+| `--no-memory` | `HELIX_NO_MEMORY` | Disable local ONNX semantic memory (zero offline downloads) |
+| `--no-reflection` | `HELIX_NO_REFLECTION` | Disable secondary self-reflection LLM calls |
+
+**Multimodal Support**: Helix supports visual inspection of `.png`, `.jpg`, `.jpeg`, `.gif`, and `.webp` images via `--image <PATH>`, the `read_image` tool, and `read_file` on image paths.
 
 ---
 
