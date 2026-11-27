@@ -17,12 +17,12 @@ This document outlines the short-term, mid-term, and long-term milestones for th
 ##  Future Milestones
 
 ###  Short-Term (Next 1-3 Months): Observability & Diagnostics
-*   **OTLP Tracing & Observability**: Integrate native OpenTelemetry (`opentelemetry` & `tracing-opentelemetry`) to export spans for model latencies, vector DB search queries, and sandbox executions to external collectors (e.g. Jaeger, Honeycomb).
+*   **OTLP Tracing & Observability**: *(Completed in v0.5.0)* Native OpenTelemetry integration with Pydantic Logfire exporter and fine-tuning trajectory capture.
 *   **WASM Sandbox Resource Profiling**: Expose WASM guest execution resource statistics (fuel/gas consumed via `wasmi` and sandbox directory disk footprint) directly into the telemetry subscriber.
 *   **TUI Performance Overlay**: Add a lightweight, interactive terminal visualization showing real-time token budgets, memory retrieval quality scores, and tool execution cycles.
 
 ###  Mid-Term (Next 3-6 Months): Multimodal & Developer Extensibility
-*   **Multimodal Input Support**: Refactor the inner message structure from a plain `String` to content-part enums, allowing users to attach screenshots or file buffers, and update the API drivers (Ollama/OpenAI) to support vision models.
+*   **Multimodal Input Support**: *(Completed)* Supports `.png`, `.jpg`, `.jpeg`, `.gif`, and `.webp` images via `--image <PATH>`, `read_image`, and `read_file`, with OpenAI Chat Completions `image_url` and Ollama native `images` payload drivers.
 *   **WASM/WASI Plugin SDK**: Develop a structured SDK and manifest format allowing developers to write custom tools in Rust, C, or Go, compile them to WebAssembly, and dynamically register them in the sandbox.
 *   **Dynamic SLM-Based Context Compaction**: Implement smart context compression utilizing a local Small Language Model (SLM) to summarize old chat turns instead of simple turn omission.
 
